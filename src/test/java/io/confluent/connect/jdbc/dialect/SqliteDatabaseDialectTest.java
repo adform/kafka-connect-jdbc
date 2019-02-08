@@ -22,6 +22,7 @@ import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.sql.SQLException;
@@ -35,6 +36,7 @@ import io.confluent.connect.jdbc.util.TableId;
 
 import static org.junit.Assert.assertEquals;
 
+@Ignore
 public class SqliteDatabaseDialectTest extends BaseDialectTest<SqliteDatabaseDialect> {
 
   private final SqliteHelper sqliteHelper = new SqliteHelper(getClass().getSimpleName());

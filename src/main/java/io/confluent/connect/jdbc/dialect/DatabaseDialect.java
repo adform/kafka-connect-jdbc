@@ -366,14 +366,15 @@ public interface DatabaseDialect extends ConnectionProvider {
    *                      but may be empty
    * @param nonKeyColumns the identifiers of the other columns in the table; may not be null but may
    *                      be empty
+   * @param allFields     all table fields; used to get type information for upserts
    * @return the upsert/merge statement; may not be null
    * @throws UnsupportedOperationException if the dialect does not support upserts
    */
   String buildUpsertQueryStatement(
-      TableId table,
-      Collection<ColumnId> keyColumns,
-      Collection<ColumnId> nonKeyColumns
-  );
+          TableId table,
+          Collection<ColumnId> keyColumns,
+          Collection<ColumnId> nonKeyColumns,
+          Map<String, SinkRecordField> allFields);
 
   /**
    * Build the DROP TABLE statement expression for the given table.

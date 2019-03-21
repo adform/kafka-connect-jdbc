@@ -25,6 +25,7 @@ import org.apache.kafka.connect.data.Timestamp;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.SubprotocolBasedProvider;
 import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
@@ -144,10 +145,10 @@ public class SqlServerDatabaseDialect extends GenericDatabaseDialect {
 
   @Override
   public String buildUpsertQueryStatement(
-      TableId table,
-      Collection<ColumnId> keyColumns,
-      Collection<ColumnId> nonKeyColumns
-  ) {
+          TableId table,
+          Collection<ColumnId> keyColumns,
+          Collection<ColumnId> nonKeyColumns,
+          Map<String, SinkRecordField> allFields) {
     ExpressionBuilder builder = expressionBuilder();
     builder.append("merge into ");
     builder.append(table);

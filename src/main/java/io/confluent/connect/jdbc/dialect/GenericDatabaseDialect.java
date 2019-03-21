@@ -1391,10 +1391,10 @@ public class GenericDatabaseDialect implements DatabaseDialect {
 
   @Override
   public String buildUpsertQueryStatement(
-      TableId table,
-      Collection<ColumnId> keyColumns,
-      Collection<ColumnId> nonKeyColumns
-  ) {
+          TableId table,
+          Collection<ColumnId> keyColumns,
+          Collection<ColumnId> nonKeyColumns,
+          Map<String, SinkRecordField> allFields) {
     throw new UnsupportedOperationException();
   }
 

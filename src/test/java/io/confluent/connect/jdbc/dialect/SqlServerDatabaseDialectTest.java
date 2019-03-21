@@ -22,6 +22,7 @@ import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.Test;
 
+import java.util.Collections;
 import java.util.List;
 
 import io.confluent.connect.jdbc.util.TableId;
@@ -124,7 +125,7 @@ public class SqlServerDatabaseDialectTest extends BaseDialectTest<SqlServerDatab
                       "[columnB], [columnC], [columnD], [id1], [id2]) values (incoming.[columnA]," +
                       "incoming.[columnB],incoming.[columnC],incoming.[columnD],incoming.[id1]," +
                       "incoming.[id2]);";
-    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);
+    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD, Collections.emptyMap());
     assertEquals(expected, sql);
   }
 
@@ -181,7 +182,7 @@ public class SqlServerDatabaseDialectTest extends BaseDialectTest<SqlServerDatab
         "([name], [salary], [address], [id]) values (incoming.[name],incoming" +
         ".[salary],incoming.[address],incoming.[id]);",
         dialect.buildUpsertQueryStatement(customer, columns(customer, "id"),
-                                          columns(customer, "name", "salary", "address")));
+                                          columns(customer, "name", "salary", "address"), Collections.emptyMap()));
   }
 
   @Test
@@ -196,6 +197,6 @@ public class SqlServerDatabaseDialectTest extends BaseDialectTest<SqlServerDatab
         "matched then insert ([ISBN], [year], [pages], [author], [title]) values (incoming" +
         ".[ISBN],incoming.[year]," + "incoming.[pages],incoming.[author],incoming.[title]);",
         dialect.buildUpsertQueryStatement(book, columns(book, "author", "title"),
-                                          columns(book, "ISBN", "year", "pages")));
+                                          columns(book, "ISBN", "year", "pages"), Collections.emptyMap()));
   }
 }

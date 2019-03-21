@@ -22,6 +22,7 @@ import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.Test;
 
+import java.util.Collections;
 import java.util.List;
 
 import io.confluent.connect.jdbc.util.TableId;
@@ -119,7 +120,7 @@ public class PostgreSqlDatabaseDialectTest extends BaseDialectTest<PostgreSqlDat
                       "\"id2\") DO UPDATE SET \"columnA\"=EXCLUDED" +
                       ".\"columnA\",\"columnB\"=EXCLUDED.\"columnB\",\"columnC\"=EXCLUDED" +
                       ".\"columnC\",\"columnD\"=EXCLUDED.\"columnD\"";
-    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);
+    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD, Collections.emptyMap());
     assertEquals(expected, sql);
   }
 
@@ -171,7 +172,7 @@ public class PostgreSqlDatabaseDialectTest extends BaseDialectTest<PostgreSqlDat
                  "VALUES (?,?,?,?) ON CONFLICT (\"id\") DO UPDATE SET \"name\"=EXCLUDED.\"name\"," +
                  "\"salary\"=EXCLUDED.\"salary\",\"address\"=EXCLUDED.\"address\"", dialect
                      .buildUpsertQueryStatement(customer, columns(customer, "id"),
-                                                columns(customer, "name", "salary", "address")));
+                                                columns(customer, "name", "salary", "address"), Collections.emptyMap()));
   }
 
 }

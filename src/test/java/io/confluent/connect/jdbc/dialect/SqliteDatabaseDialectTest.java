@@ -27,6 +27,7 @@ import org.junit.Test;
 
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.Collections;
 import java.util.List;
 
 import io.confluent.connect.jdbc.sink.SqliteHelper;
@@ -140,7 +141,7 @@ public class SqliteDatabaseDialectTest extends BaseDialectTest<SqliteDatabaseDia
   public void shouldBuildUpsertStatement() {
     String expected = "INSERT OR REPLACE INTO `myTable`(`id1`,`id2`,`columnA`,`columnB`," +
                       "`columnC`,`columnD`) VALUES(?,?,?,?,?,?)";
-    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);
+    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD, Collections.emptyMap());
     assertEquals(expected, sql);
   }
 
@@ -190,7 +191,7 @@ public class SqliteDatabaseDialectTest extends BaseDialectTest<SqliteDatabaseDia
     assertEquals(
         "INSERT OR REPLACE INTO `Book`(`author`,`title`,`ISBN`,`year`,`pages`) VALUES(?,?,?,?,?)",
         dialect.buildUpsertQueryStatement(book, columns(book, "author", "title"),
-                                          columns(book, "ISBN", "year", "pages")));
+                                          columns(book, "ISBN", "year", "pages"), Collections.emptyMap()));
   }
 
   @Test(expected = SQLException.class)

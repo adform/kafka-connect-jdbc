@@ -25,6 +25,7 @@ import org.junit.Test;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -154,7 +155,7 @@ public class SybaseDatabaseDialectTest extends BaseDialectTest<SybaseDatabaseDia
                       "\"columnB\", \"columnC\", \"columnD\", \"id1\", \"id2\") values (incoming.\"columnA\"," +
                       "incoming.\"columnB\",incoming.\"columnC\",incoming.\"columnD\",incoming.\"id1\"," +
                       "incoming.\"id2\");";
-    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);
+    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD, Collections.emptyMap());
     assertEquals(expected, sql);
   }
 
@@ -211,7 +212,7 @@ public class SybaseDatabaseDialectTest extends BaseDialectTest<SybaseDatabaseDia
         "(\"name\", \"salary\", \"address\", \"id\") values (incoming.\"name\",incoming" +
         ".\"salary\",incoming.\"address\",incoming.\"id\");",
         dialect.buildUpsertQueryStatement(customer, columns(customer, "id"),
-                                          columns(customer, "name", "salary", "address")));
+                                          columns(customer, "name", "salary", "address"), Collections.emptyMap()));
   }
 
   @Test
@@ -226,7 +227,7 @@ public class SybaseDatabaseDialectTest extends BaseDialectTest<SybaseDatabaseDia
         "matched then insert (\"ISBN\", \"year\", \"pages\", \"author\", \"title\") values (incoming" +
         ".\"ISBN\",incoming.\"year\"," + "incoming.\"pages\",incoming.\"author\",incoming.\"title\");",
         dialect.buildUpsertQueryStatement(book, columns(book, "author", "title"),
-                                          columns(book, "ISBN", "year", "pages")));
+                                          columns(book, "ISBN", "year", "pages"), Collections.emptyMap()));
   }
 
   @Test

@@ -220,4 +220,12 @@ public class DerbyDatabaseDialectTest extends BaseDialectTest<DerbyDatabaseDiale
         actor, columns(actor, "actor_id"), columns(actor));
     assertEquals(expected, sql);
   }
+
+  @Test
+  public void shouldBuildDeleteStatement() {
+    String expected = "DELETE FROM \"myTable\" WHERE \"id1\" = ? AND \"id2\" = ?";
+    String sql = dialect.buildDeleteStatement(tableId, pkColumns);
+
+    assertEquals(expected, sql);
+  }
 }

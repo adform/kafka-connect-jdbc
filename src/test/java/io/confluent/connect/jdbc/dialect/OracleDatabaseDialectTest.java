@@ -131,6 +131,14 @@ public class OracleDatabaseDialectTest extends BaseDialectTest<OracleDatabaseDia
   }
 
   @Test
+  public void shouldBuildDeleteStatement() {
+    String expected = "DELETE FROM \"myTable\" WHERE \"id1\" = ? AND \"id2\" = ?";
+    String sql = dialect.buildDeleteStatement(tableId, pkColumns);
+
+    assertEquals(expected, sql);
+  }
+
+  @Test
   public void createOneColNoPk() {
     verifyCreateOneColNoPk(
         "CREATE TABLE \"myTable\" (" + System.lineSeparator() + "\"col1\" NUMBER(10,0) NOT NULL)");

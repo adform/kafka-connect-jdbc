@@ -114,6 +114,14 @@ public class VerticaDatabaseDialectTest extends BaseDialectTest<VerticaDatabaseD
     assertStatements(sql, statements);
   }
 
+  @Test
+  public void shouldBuildDeleteStatement() {
+    String expected = "DELETE FROM \"myTable\" WHERE \"id1\" = ? AND \"id2\" = ?";
+    String sql = dialect.buildDeleteStatement(tableId, pkColumns);
+
+    assertEquals(expected, sql);
+  }
+
   @Test(expected = UnsupportedOperationException.class)
   public void shouldBuildUpsertStatement() {
     dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);

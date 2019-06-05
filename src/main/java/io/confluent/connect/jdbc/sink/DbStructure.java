@@ -1,17 +1,16 @@
 /*
- * Copyright 2016 Confluent Inc.
+ * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 
 package io.confluent.connect.jdbc.sink;
@@ -51,10 +50,10 @@ public class DbStructure {
    * @throws SQLException if a DDL operation was deemed necessary but failed
    */
   public boolean createOrAmendIfNecessary(
-      final JdbcSinkConfig config,
-      final Connection connection,
-      final TableId tableId,
-      final FieldsMetadata fieldsMetadata
+          final JdbcSinkConfig config,
+          final Connection connection,
+          final TableId tableId,
+          final FieldsMetadata fieldsMetadata
   ) throws SQLException {
     if (tableDefns.get(connection, tableId) == null) {
       // Table does not yet exist, so attempt to create it ...
@@ -79,17 +78,18 @@ public class DbStructure {
    * @throws SQLException if CREATE failed
    */
   void create(
-      final JdbcSinkConfig config,
-      final Connection connection,
-      final TableId tableId,
-      final FieldsMetadata fieldsMetadata
+          final JdbcSinkConfig config,
+          final Connection connection,
+          final TableId tableId,
+          final FieldsMetadata fieldsMetadata
   ) throws SQLException {
     if (!config.autoCreate) {
       throw new ConnectException(
-          String.format("Table %s is missing and auto-creation is disabled", tableId)
+              String.format("Table %s is missing and auto-creation is disabled", tableId)
       );
     }
     String sql = dbDialect.buildCreateTableStatement(tableId, fieldsMetadata.allFields.values());
+    log.info("Creating table with sql: {}", sql);
     dbDialect.applyDdlStatements(connection, Collections.singletonList(sql));
   }
 
@@ -98,11 +98,11 @@ public class DbStructure {
    * @throws SQLException if ALTER was deemed necessary but failed
    */
   boolean amendIfNecessary(
-      final JdbcSinkConfig config,
-      final Connection connection,
-      final TableId tableId,
-      final FieldsMetadata fieldsMetadata,
-      final int maxRetries
+          final JdbcSinkConfig config,
+          final Connection connection,
+          final TableId tableId,
+          final FieldsMetadata fieldsMetadata,
+          final int maxRetries
   ) throws SQLException {
     // NOTE:
     //   The table might have extra columns defined (hopefully with default values), which is not
@@ -120,8 +120,8 @@ public class DbStructure {
     //    }
 
     final Set<SinkRecordField> missingFields = missingFields(
-        fieldsMetadata.allFields.values(),
-        tableDefn.columnNames()
+            fieldsMetadata.allFields.values(),
+            tableDefn.columnNames()
     );
 
     if (missingFields.isEmpty()) {
@@ -131,49 +131,51 @@ public class DbStructure {
     for (SinkRecordField missingField: missingFields) {
       if (!missingField.isOptional() && missingField.defaultValue() == null) {
         throw new ConnectException(
-            "Cannot ALTER to add missing field " + missingField
-            + ", as it is not optional and does not have a default value"
+                String.format(
+                        "Cannot ALTER %s to add missing field %s, as it is not optional and "
+                                + "does not have a default value",
+                        tableId, missingField)
         );
       }
     }
 
     if (!config.autoEvolve) {
       throw new ConnectException(String.format(
-          "Table %s is missing fields (%s) and auto-evolution is disabled",
-          tableId,
-          missingFields
+              "Table %s is missing fields (%s) and auto-evolution is disabled",
+              tableId,
+              missingFields
       ));
     }
 
     final List<String> amendTableQueries = dbDialect.buildAlterTable(tableId, missingFields);
     log.info(
-        "Amending table to add missing fields:{} maxRetries:{} with SQL: {}",
-        missingFields,
-        maxRetries,
-        amendTableQueries
+            "Amending table to add missing fields:{} maxRetries:{} with SQL: {}",
+            missingFields,
+            maxRetries,
+            amendTableQueries
     );
     try {
       dbDialect.applyDdlStatements(connection, amendTableQueries);
     } catch (SQLException sqle) {
       if (maxRetries <= 0) {
         throw new ConnectException(
-            String.format(
-                "Failed to amend table '%s' to add missing fields: %s",
-                tableId,
-                missingFields
-            ),
-            sqle
+                String.format(
+                        "Failed to amend table '%s' to add missing fields: %s",
+                        tableId,
+                        missingFields
+                ),
+                sqle
         );
       }
       log.warn("Amend failed, re-attempting", sqle);
       tableDefns.refresh(connection, tableId);
       // Perhaps there was a race with other tasks to add the columns
       return amendIfNecessary(
-          config,
-          connection,
-          tableId,
-          fieldsMetadata,
-          maxRetries - 1
+              config,
+              connection,
+              tableId,
+              fieldsMetadata,
+              maxRetries - 1
       );
     }
 
@@ -182,12 +184,13 @@ public class DbStructure {
   }
 
   Set<SinkRecordField> missingFields(
-      Collection<SinkRecordField> fields,
-      Set<String> dbColumnNames
+          Collection<SinkRecordField> fields,
+          Set<String> dbColumnNames
   ) {
     final Set<SinkRecordField> missingFields = new HashSet<>();
     for (SinkRecordField field : fields) {
       if (!dbColumnNames.contains(field.name())) {
+        log.debug("Found missing field: {}", field);
         missingFields.add(field);
       }
     }
@@ -204,8 +207,8 @@ public class DbStructure {
 
     if (columnNamesLowerCase.size() != dbColumnNames.size()) {
       log.warn(
-          "Table has column names that differ only by case. Original columns={}",
-          dbColumnNames
+              "Table has column names that differ only by case. Original columns={}",
+              dbColumnNames
       );
     }
 
@@ -218,9 +221,9 @@ public class DbStructure {
 
     if (missingFieldsIgnoreCase.size() > 0) {
       log.info(
-          "Unable to find fields {} among column names {}",
-          missingFieldsIgnoreCase,
-          dbColumnNames
+              "Unable to find fields {} among column names {}",
+              missingFieldsIgnoreCase,
+              dbColumnNames
       );
     }
 

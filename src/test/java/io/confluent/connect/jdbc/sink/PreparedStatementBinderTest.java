@@ -1,21 +1,23 @@
 /*
- * Copyright 2016 Confluent Inc.
+ * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 
 package io.confluent.connect.jdbc.sink;
 
+import java.time.ZoneOffset;
+import java.util.Calendar;
+import java.util.TimeZone;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;
@@ -55,7 +57,6 @@ import static org.mockito.Mockito.verify;
 public class PreparedStatementBinderTest {
 
   private DatabaseDialect dialect;
-  private JdbcSinkConfig config;
 
   @Before
   public void beforeEach() {
@@ -65,7 +66,6 @@ public class PreparedStatementBinderTest {
     props.put(JdbcSinkConfig.CONNECTION_PASSWORD, "password");
     JdbcSinkConfig config = new JdbcSinkConfig(props);
     dialect = new GenericDatabaseDialect(config);
-    this.config = config;
   }
 
   @Test
@@ -117,12 +117,10 @@ public class PreparedStatementBinderTest {
     PreparedStatementBinder binder = new PreparedStatementBinder(
         dialect,
         statement,
-        null,
         pkMode,
         schemaPair,
         fieldsMetadata,
-        JdbcSinkConfig.InsertMode.INSERT,
-        config
+        JdbcSinkConfig.InsertMode.INSERT
     );
 
     binder.bindRecord(new SinkRecord("topic", 0, null, null, valueSchema, valueStruct, 0));
@@ -141,93 +139,99 @@ public class PreparedStatementBinderTest {
     verify(statement, times(1)).setDouble(index++, valueStruct.getFloat64("double"));
     verify(statement, times(1)).setBytes(index++, valueStruct.getBytes("bytes"));
     verify(statement, times(1)).setBigDecimal(index++, (BigDecimal) valueStruct.get("decimal"));
-    verify(statement, times(1)).setDate(index++, new java.sql.Date(((java.util.Date) valueStruct.get("date")).getTime()), DateTimeUtils.UTC_CALENDAR.get());
-    verify(statement, times(1)).setTime(index++, new java.sql.Time(((java.util.Date) valueStruct.get("time")).getTime()), DateTimeUtils.UTC_CALENDAR.get());
-    verify(statement, times(1)).setTimestamp(index++, new java.sql.Timestamp(((java.util.Date) valueStruct.get("timestamp")).getTime()), DateTimeUtils.UTC_CALENDAR.get());
+    Calendar utcCalendar = DateTimeUtils.UTC_CALENDAR.get();
+    verify(
+        statement,
+        times(1)
+    ).setDate(index++, new java.sql.Date(((java.util.Date) valueStruct.get("date")).getTime()), utcCalendar);
+    verify(
+        statement,
+        times(1)
+    ).setTime(index++, new java.sql.Time(((java.util.Date) valueStruct.get("time")).getTime()), utcCalendar);
+    verify(
+        statement,
+        times(1)
+    ).setTimestamp(index++, new java.sql.Timestamp(((java.util.Date) valueStruct.get("timestamp")).getTime()), utcCalendar);
     // last field is optional and is null-valued in struct
     verify(statement, times(1)).setObject(index++, null);
   }
 
-    @Test
-    public void bindRecordUpsertMode() throws SQLException, ParseException {
-        Schema valueSchema = SchemaBuilder.struct().name("com.example.Person")
-                .field("firstName", Schema.STRING_SCHEMA)
-                .field("long", Schema.INT64_SCHEMA)
-                .build();
+  @Test
+  public void bindRecordUpsertMode() throws SQLException, ParseException {
+    Schema valueSchema = SchemaBuilder.struct().name("com.example.Person")
+        .field("firstName", Schema.STRING_SCHEMA)
+        .field("long", Schema.INT64_SCHEMA)
+        .build();
 
-        Struct valueStruct = new Struct(valueSchema)
-                .put("firstName", "Alex")
-                .put("long", (long) 12425436);
+    Struct valueStruct = new Struct(valueSchema)
+        .put("firstName", "Alex")
+        .put("long", (long) 12425436);
 
-        SchemaPair schemaPair = new SchemaPair(null, valueSchema);
+    SchemaPair schemaPair = new SchemaPair(null, valueSchema);
 
-        JdbcSinkConfig.PrimaryKeyMode pkMode = JdbcSinkConfig.PrimaryKeyMode.RECORD_VALUE;
+    JdbcSinkConfig.PrimaryKeyMode pkMode = JdbcSinkConfig.PrimaryKeyMode.RECORD_VALUE;
 
-        List<String> pkFields = Collections.singletonList("long");
+    List<String> pkFields = Collections.singletonList("long");
 
-        FieldsMetadata fieldsMetadata = FieldsMetadata.extract("people", pkMode, pkFields, Collections.<String>emptySet(), schemaPair);
+    FieldsMetadata fieldsMetadata = FieldsMetadata.extract("people", pkMode, pkFields, Collections.<String>emptySet(), schemaPair);
 
-        PreparedStatement statement = mock(PreparedStatement.class);
+    PreparedStatement statement = mock(PreparedStatement.class);
 
-        PreparedStatementBinder binder = new PreparedStatementBinder(
-                dialect,
-                statement,
-                null,
-                pkMode,
-                schemaPair,
-                fieldsMetadata, JdbcSinkConfig.InsertMode.UPSERT,
-                config
-        );
+    PreparedStatementBinder binder = new PreparedStatementBinder(
+        dialect,
+        statement,
+        pkMode,
+        schemaPair,
+        fieldsMetadata, JdbcSinkConfig.InsertMode.UPSERT
+    );
 
-        binder.bindRecord(new SinkRecord("topic", 0, null, null, valueSchema, valueStruct, 0));
+    binder.bindRecord(new SinkRecord("topic", 0, null, null, valueSchema, valueStruct, 0));
 
-        int index = 1;
-        // key field first
-        verify(statement, times(1)).setLong(index++, valueStruct.getInt64("long"));
-        // rest in order of schema def
-        verify(statement, times(1)).setString(index++, valueStruct.getString("firstName"));
-    }
+    int index = 1;
+    // key field first
+    verify(statement, times(1)).setLong(index++, valueStruct.getInt64("long"));
+    // rest in order of schema def
+    verify(statement, times(1)).setString(index++, valueStruct.getString("firstName"));
+  }
 
-    @Test
-    public void bindRecordUpdateMode() throws SQLException, ParseException {
-        Schema valueSchema = SchemaBuilder.struct().name("com.example.Person")
-                .field("firstName", Schema.STRING_SCHEMA)
-                .field("long", Schema.INT64_SCHEMA)
-                .build();
+  @Test
+  public void bindRecordUpdateMode() throws SQLException, ParseException {
+    Schema valueSchema = SchemaBuilder.struct().name("com.example.Person")
+        .field("firstName", Schema.STRING_SCHEMA)
+        .field("long", Schema.INT64_SCHEMA)
+        .build();
 
-        Struct valueStruct = new Struct(valueSchema)
-                .put("firstName", "Alex")
-                .put("long", (long) 12425436);
+    Struct valueStruct = new Struct(valueSchema)
+        .put("firstName", "Alex")
+        .put("long", (long) 12425436);
 
-        SchemaPair schemaPair = new SchemaPair(null, valueSchema);
+    SchemaPair schemaPair = new SchemaPair(null, valueSchema);
 
-        JdbcSinkConfig.PrimaryKeyMode pkMode = JdbcSinkConfig.PrimaryKeyMode.RECORD_VALUE;
+    JdbcSinkConfig.PrimaryKeyMode pkMode = JdbcSinkConfig.PrimaryKeyMode.RECORD_VALUE;
 
-        List<String> pkFields = Collections.singletonList("long");
+    List<String> pkFields = Collections.singletonList("long");
 
-        FieldsMetadata fieldsMetadata = FieldsMetadata.extract("people", pkMode, pkFields,
-                Collections.<String>emptySet(), schemaPair);
+    FieldsMetadata fieldsMetadata = FieldsMetadata.extract("people", pkMode, pkFields,
+        Collections.<String>emptySet(), schemaPair);
 
-        PreparedStatement statement = mock(PreparedStatement.class);
+    PreparedStatement statement = mock(PreparedStatement.class);
 
-        PreparedStatementBinder binder = new PreparedStatementBinder(
-                dialect,
-                statement,
-                null,
-                pkMode,
-                schemaPair,
-                fieldsMetadata, JdbcSinkConfig.InsertMode.UPDATE,
-                config
-        );
+    PreparedStatementBinder binder = new PreparedStatementBinder(
+        dialect,
+        statement,
+        pkMode,
+        schemaPair,
+        fieldsMetadata, JdbcSinkConfig.InsertMode.UPDATE
+    );
 
-        binder.bindRecord(new SinkRecord("topic", 0, null, null, valueSchema, valueStruct, 0));
+    binder.bindRecord(new SinkRecord("topic", 0, null, null, valueSchema, valueStruct, 0));
 
-        int index = 1;
+    int index = 1;
 
-        // non key first
-        verify(statement, times(1)).setString(index++, valueStruct.getString("firstName"));
-        // last the keys
-        verify(statement, times(1)).setLong(index++, valueStruct.getInt64("long"));
-    }
+    // non key first
+    verify(statement, times(1)).setString(index++, valueStruct.getString("firstName"));
+    // last the keys
+    verify(statement, times(1)).setLong(index++, valueStruct.getInt64("long"));
+  }
 
 }

@@ -1400,23 +1400,19 @@ public class GenericDatabaseDialect implements DatabaseDialect {
 
   @Override
   public StatementBinder statementBinder(
-      PreparedStatement statement,
-      PreparedStatement deleteStatement,
-      PrimaryKeyMode pkMode,
-      SchemaPair schemaPair,
-      FieldsMetadata fieldsMetadata,
-      InsertMode insertMode,
-      JdbcSinkConfig config
+          PreparedStatement statement,
+          PrimaryKeyMode pkMode,
+          SchemaPair schemaPair,
+          FieldsMetadata fieldsMetadata,
+          InsertMode insertMode
   ) {
     return new PreparedStatementBinder(
-        this,
-        statement,
-        deleteStatement,
-        pkMode,
-        schemaPair,
-        fieldsMetadata,
-        insertMode,
-        config
+            this,
+            statement,
+            pkMode,
+            schemaPair,
+            fieldsMetadata,
+            insertMode
     );
   }
 

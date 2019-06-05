@@ -35,6 +35,9 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -58,24 +61,25 @@ public class VerticaBufferedRecords {
   private final DbStructure dbStructure;
   private final Connection connection;
 
-  private List<SinkRecord> records = new ArrayList<>();
-  private FieldsMetadata fieldsMetadata;
-  private PreparedStatement insertPreparedStatement;
-  private DatabaseDialect.StatementBinder preparedStatementBinder;
+  private List<SinkRecord> buffer = new ArrayList<>();
 
-  private Schema keySchema;
-  private Schema valueSchema;
-  private boolean batchContainsDeletes = false;
-  private PreparedStatement deletePreparedStatement;
-  private PreparedStatement mergePreparedStatement;
+  // key schema is in every record
+  private Schema knownKeySchema;
+  // value schema is missing in delete buffer
+  private Schema knownValueSchema;
+  private RecordSchemaDerivedState schemaState;
+  // flag that we have delete buffer in buffer
+  private boolean deleteInBuffer = false;
 
   public VerticaBufferedRecords(
       JdbcSinkConfig config,
       TableId tableId,
       VerticaMergeDatabaseDialect dbDialect,
       DbStructure dbStructure,
-      Connection connection
-  ) {
+      Connection connection,
+      Schema keySchema,
+      Schema valueSchema
+  ) throws SQLException {
     this.tableId = tableId;
     String tempTableName = ExpressionBuilder.create().append(tableId, false)
         .toString().replace('.', '_');
@@ -84,160 +88,170 @@ public class VerticaBufferedRecords {
     this.dbDialect = dbDialect;
     this.dbStructure = dbStructure;
     this.connection = connection;
+    this.knownKeySchema = keySchema; // key schema is always known
+    this.knownValueSchema = valueSchema; // nullable theoretically
+    this.schemaState = new RecordSchemaDerivedState(keySchema, valueSchema);
   }
 
+  enum StateOutcome {
+    ADD_RECORD, FLUSH_BUFFER, CHANGE_SCHEMA, SET_DELETE_FLAG
+  }
+
+  StateOutcome checkSchema(Schema recordKeySchema, Schema recordValueSchema) {
+
+    if (!Objects.equals(knownKeySchema, recordKeySchema)) {
+      // key schema change (extremely rare)
+      return StateOutcome.CHANGE_SCHEMA;
+    }
+
+    if (recordValueSchema == null) {
+      // delete (quite rare) - no chance to check value schema change
+      // we only need to track we have deletes in batch so we can flush them when 1st
+      // non delete request comes to preserve order of deletes and updates
+      return config.deleteEnabled
+          ? StateOutcome.SET_DELETE_FLAG
+          : StateOutcome.ADD_RECORD;
+
+    } else if (knownValueSchema == null) { // and record.knownValueSchema() != null
+      // upsert (1st non delete in batch)
+      // may only happens once per batch only if batch starts with deletes
+      return StateOutcome.CHANGE_SCHEMA;
+    } else if (!Objects.equals(knownValueSchema, recordValueSchema)) {
+      // upsert & changed value schema (extremely rare)
+      return StateOutcome.CHANGE_SCHEMA;
+    } else {
+      // upsert & same value schema (common case)
+      return deleteInBuffer
+          ? StateOutcome.FLUSH_BUFFER // upsert following one or more deletes
+          : StateOutcome.ADD_RECORD;
+    }
+  }
+
+  /**
+   * Be aware that...
+   * .
+   * Even 1st record of batch can be deletion (record.knownValueSchema() is null)
+   * so we will not be able to extract value schema from it
+   * In fact all buffer in batch can be deletes
+   * .
+   * From performance point we expect
+   * - delete to be rare comparing to inserts and updates
+   * - schema changes in batch are extremely rare
+   */
   public List<SinkRecord> add(SinkRecord record) throws SQLException {
 
-    List<SinkRecord> flushed = new ArrayList<>();
+    final Schema recordKeySchema = record.keySchema();
+    final Schema recordValueSchema = record.valueSchema();
 
-    boolean schemaChanged = false;
-
-    if (!Objects.equals(keySchema, record.keySchema())) {
-      keySchema = record.keySchema();
-      schemaChanged = true;
-    }
-
-    if (record.valueSchema() == null) {
-      // For deletes, both the value and value schema come in as null.
-      // We don't want to treat this as a schema change if key schemas is the same
-      // otherwise we flush unnecessarily.
-      if (config.deleteEnabled) {
-        batchContainsDeletes = true;
-      }
-    } else if (Objects.equals(valueSchema, record.valueSchema())) {
-      if (config.deleteEnabled && batchContainsDeletes) {
-        // flush so an insert after a delete of same record isn't lost
+    ArrayList<SinkRecord> flushed = new ArrayList<>();
+    StateOutcome outcome = checkSchema(recordKeySchema, recordValueSchema);
+    switch (outcome) {
+      case FLUSH_BUFFER:
         flushed.addAll(flush());
-      }
-    } else {
-      valueSchema = record.valueSchema();
-      schemaChanged = true;
+        break;
+      case CHANGE_SCHEMA:
+        flushed.addAll(flush());
+        knownKeySchema = recordKeySchema;
+        knownValueSchema = recordValueSchema; // nullable
+        schemaState.close();
+        schemaState = new RecordSchemaDerivedState(recordKeySchema, recordValueSchema);
+        break;
+      case SET_DELETE_FLAG:
+        deleteInBuffer = true;
+        break;
+      default:
+        throw new IllegalStateException("Unsupported " + outcome);
     }
 
-    if (schemaChanged) {
-      // Each batch needs to have the same schemas, so get the buffered records out
-      flushed.addAll(flush());
-
-      onSchemaChanged(new SchemaPair(record.keySchema(), record.valueSchema()));
-    }
-
-    records.add(record);
-    if (records.size() >= config.batchSize) {
-      log.debug("Flushing buffered records after exceeding configured batch size {}.",
+    buffer.add(record);
+    if (buffer.size() >= config.batchSize) {
+      log.debug("Flushing buffered buffer after exceeding configured batch size {}.",
           config.batchSize);
       flushed.addAll(flush());
     }
-
     return flushed;
   }
 
-  private void onSchemaChanged(SchemaPair schemaPair) throws SQLException {
-    // re-initialize everything that depends on the record schema
-    fieldsMetadata = FieldsMetadata.extract(
-        tableId.tableName(),
-        config.pkMode,
-        config.pkFields,
-        config.fieldsWhitelist,
-        schemaPair
-    );
-    dbStructure.createOrAmendIfNecessary(
-        config,
-        connection,
-        tableId,
-        fieldsMetadata
-    );
+  public void close() throws SQLException {
+    schemaState.close();
+  }
 
-    final String insertSql = getTmpInsertSql();
-    final String deleteSql = getDeleteSql();
-
-    String mergeSql = dbDialect.buildMergeTableStatement(
-        tmpTableId,
-        tableId,
-        asColumns(fieldsMetadata.keyFieldNames),
-        asColumns(fieldsMetadata.nonKeyFieldNames));
-
-    log.debug(
-        "{} INSERT sql: \n{}\nDELETE sql: {}\nMERGE sql: \n{}",
-        config.insertMode,
-        insertSql,
-        deleteSql,
-        mergeSql
-    );
-    close();
-    // temporary table exist for insert prepared statement creation
-    // drop & create is performed for case that schema changes in the middle of buffer
-    dbDialect.recreateTempTable(
-        connection,
-        tmpTableId.tableName(),
-        fieldsMetadata.allFields.values(),
-        false);
-
-    insertPreparedStatement = connection.prepareStatement(insertSql);
-    deletePreparedStatement = config.deleteEnabled ? connection.prepareStatement(deleteSql) : null;
-    mergePreparedStatement = connection.prepareStatement(mergeSql);
-    preparedStatementBinder = dbDialect.statementBinder(
-        insertPreparedStatement,
-        deletePreparedStatement,
-        config.pkMode,
-        schemaPair,
-        fieldsMetadata,
-        config.insertMode,
-        config
-    );
-
+  enum Operation {
+    UPSERT, DELETE
   }
 
   public List<SinkRecord> flush() throws SQLException {
-    if (records.isEmpty()) {
-      return new ArrayList<>();
+    if (buffer.isEmpty()) {
+      return Collections.emptyList();
     }
 
-    for (SinkRecord record : records) {
-      preparedStatementBinder.bindRecord(record);
+    // Temporary local table must not contain duplicate keys for MERGE operation
+    // -> Keep only last record
+    // TODO check if we have to merge updated values from multiple records
+    // instead of keeping last and discarding other
+    Map<Object, Operation> operations = new HashMap<>();
+    for (int i = buffer.size() - 1; i != 0; --i) { // iterate from latest to oldest
+      SinkRecord record = buffer.get(i);
+      Object recordKey = record.key();
+      if (operations.get(recordKey) == null) {
+        if (record.value() != null) {
+          schemaState.insertBinder.bindRecord(record);
+          operations.put(recordKey, Operation.UPSERT);
+        } else {
+          schemaState.deleteBinder.bindRecord(record);
+          operations.put(recordKey, Operation.DELETE);
+        }
+      }
     }
+
+    // 1. Insert into temporary table
     int totalUpdateCount = 0;
     boolean successNoInfo = false;
-    for (int updateCount : insertPreparedStatement.executeBatch()) {
+    for (int updateCount : schemaState.insertStatement.executeBatch()) {
       if (updateCount == Statement.SUCCESS_NO_INFO) {
         successNoInfo = true;
         continue;
       }
       totalUpdateCount += updateCount;
     }
+
+    // 2. Merge temporary table into target table
+    int mergeCount = schemaState.mergeStatement.executeUpdate();
+    log.debug("Merged count is " + mergeCount);
+
+    // 3. Delete(s) from target table
     int totalDeleteCount = 0;
-    if (deletePreparedStatement != null) {
-      for (int updateCount : deletePreparedStatement.executeBatch()) {
+    if (deleteInBuffer) {
+      for (int updateCount : schemaState.deleteStatement.executeBatch()) {
         if (updateCount != Statement.SUCCESS_NO_INFO) {
           totalDeleteCount += updateCount;
         }
       }
     }
 
-    mergePreparedStatement.executeUpdate();
-
     checkAffectedRowCount(totalUpdateCount + totalDeleteCount, successNoInfo);
 
-    final List<SinkRecord> flushedRecords = records;
-    records = new ArrayList<>();
-    batchContainsDeletes = false;
+    final List<SinkRecord> flushedRecords = buffer;
+    buffer = new ArrayList<>();
+    deleteInBuffer = false;
     return flushedRecords;
   }
 
   private void checkAffectedRowCount(int totalCount, boolean successNoInfo) {
-    if (totalCount != records.size() && !successNoInfo) {
+    if (totalCount != buffer.size() && !successNoInfo) {
       switch (config.insertMode) {
         case INSERT:
           throw new ConnectException(String.format(
-              "Row count (%d) did not sum up to total number of records inserted/deleted (%d)",
+              "Row count (%d) did not sum up to total number of buffer inserted/deleted (%d)",
               totalCount,
-              records.size()
+              buffer.size()
           ));
         case UPSERT:
         case UPDATE:
           log.debug(
-              "{}/deleted records:{} resulting in in totalUpdateCount:{}",
+              "{}/deleted buffer:{} resulting in in totalUpdateCount:{}",
               config.insertMode,
-              records.size(),
+              buffer.size(),
               totalCount
           );
           break;
@@ -247,35 +261,115 @@ public class VerticaBufferedRecords {
     }
     if (successNoInfo) {
       log.info(
-          "{} records:{} , but no count of the number of rows it affected is available",
+          "{} buffer:{} , but no count of the number of rows it affected is available",
           config.insertMode,
-          records.size()
+          buffer.size()
       );
     }
   }
 
-  public void close() throws SQLException {
-    log.info("Closing BufferedRecords with insertPreparedStatement: {} deletePreparedStatement: {}",
-        insertPreparedStatement,
-        deletePreparedStatement);
-    if (insertPreparedStatement != null) {
-      insertPreparedStatement.close();
-      insertPreparedStatement = null;
+  class RecordSchemaDerivedState {
+    private final PreparedStatement deleteStatement;
+    private final DatabaseDialect.StatementBinder deleteBinder;
+    private final PreparedStatement insertStatement;
+    private final DatabaseDialect.StatementBinder insertBinder;
+    private final PreparedStatement mergeStatement;
+
+
+    /**
+     * @param keySchema   always known
+     * @param valueSchema nullable
+     * @throws SQLException exception
+     */
+    RecordSchemaDerivedState(Schema keySchema, Schema valueSchema) throws SQLException {
+      FieldsMetadata fieldsMetadata = checkDatabaseSchema(keySchema, valueSchema);
+
+      final String insertSql = getTmpInsertSql(fieldsMetadata);
+      final String mergeSql = dbDialect.buildMergeTableStatement(
+          tmpTableId,
+          tableId,
+          asColumns(fieldsMetadata.keyFieldNames),
+          asColumns(fieldsMetadata.nonKeyFieldNames));
+      final String deleteSql = getDeleteSql(fieldsMetadata);
+
+      log.debug(
+          "{} INSERT sql: \n{}\nDELETE sql: {}\nMERGE sql: \n{}",
+          config.insertMode,
+          insertSql,
+          deleteSql,
+          mergeSql
+      );
+
+      // temporary table exist for insert prepared statement creation
+      // drop & create is performed for case that schema changes in the middle of buffer
+      dbDialect.recreateTempTable(
+          connection,
+          tmpTableId.tableName(),
+          fieldsMetadata.allFields.values(),
+          false);
+
+      mergeStatement = connection.prepareStatement(mergeSql);
+
+      SchemaPair schemaPair = new SchemaPair(keySchema, valueSchema);
+
+      deleteStatement = config.deleteEnabled
+          ? connection.prepareStatement(deleteSql) : null;
+      deleteBinder = dbDialect.statementBinder(
+          deleteStatement,
+          config.pkMode,
+          schemaPair,
+          fieldsMetadata,
+          config.insertMode
+      );
+
+      insertStatement = connection.prepareStatement(insertSql);
+      insertBinder = dbDialect.statementBinder(
+          insertStatement,
+          config.pkMode,
+          schemaPair,
+          fieldsMetadata,
+          config.insertMode
+      );
+
     }
-    if (deletePreparedStatement != null) {
-      deletePreparedStatement.close();
-      deletePreparedStatement = null;
-    }
-    if (mergePreparedStatement != null) {
-      mergePreparedStatement.close();
-      mergePreparedStatement = null;
+
+    void close() throws SQLException {
+      if (insertStatement != null) {
+        insertStatement.close();
+      }
+      if (mergeStatement != null) {
+        mergeStatement.close();
+      }
+      if (deleteStatement != null) {
+        deleteStatement.close();
+      }
     }
   }
 
+  private FieldsMetadata checkDatabaseSchema(
+      Schema keySchema,
+      Schema valueSchema) throws SQLException {
+    FieldsMetadata fieldsMetadata = FieldsMetadata.extract(
+        tableId.tableName(),
+        config.pkMode,
+        config.pkFields,
+        config.fieldsWhitelist,
+        keySchema,
+        valueSchema
+    );
+    dbStructure.createOrAmendIfNecessary(
+        config,
+        connection,
+        tableId,
+        fieldsMetadata
+    );
+    return fieldsMetadata;
+  }
+
   /**
-   * Inserts go into temporary local table
+   * Inserts go into temporary local table.
    */
-  private String getTmpInsertSql() {
+  private String getTmpInsertSql(FieldsMetadata fieldsMetadata) {
     return dbDialect.buildInsertStatement(
         tmpTableId,
         asColumns(fieldsMetadata.keyFieldNames),
@@ -285,9 +379,9 @@ public class VerticaBufferedRecords {
 
   /**
    * Deletes are slow and will go into directly into target table
-   * but we have to do it to preserve order of operations
+   * but we have to do it to preserve order of operations.
    */
-  private String getDeleteSql() {
+  private String getDeleteSql(FieldsMetadata fieldsMetadata) {
     String sql = null;
     if (config.deleteEnabled) {
       switch (config.pkMode) {
@@ -316,4 +410,5 @@ public class VerticaBufferedRecords {
         .map(name -> new ColumnId(tableId, name))
         .collect(Collectors.toList());
   }
+
 }

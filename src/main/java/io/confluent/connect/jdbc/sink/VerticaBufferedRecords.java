@@ -37,9 +37,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.Map;
 import java.util.List;
-import java.util.Objects;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -63,12 +62,10 @@ public class VerticaBufferedRecords {
 
   private List<SinkRecord> buffer = new ArrayList<>();
 
-  // key schema is in every record
   private Schema knownKeySchema;
-  // value schema is missing in delete buffer
   private Schema knownValueSchema;
   private RecordSchemaDerivedState schemaState;
-  // flag that we have delete buffer in buffer
+  // flag that we have delete record in buffer
   private boolean deleteInBuffer = false;
 
   public VerticaBufferedRecords(
@@ -88,51 +85,20 @@ public class VerticaBufferedRecords {
     this.dbDialect = dbDialect;
     this.dbStructure = dbStructure;
     this.connection = connection;
-    this.knownKeySchema = keySchema; // key schema is always known
-    this.knownValueSchema = valueSchema; // nullable theoretically
+    this.knownKeySchema = keySchema;
+    this.knownValueSchema = valueSchema;
     this.schemaState = new RecordSchemaDerivedState(keySchema, valueSchema);
-  }
-
-  enum StateOutcome {
-    ADD_RECORD, FLUSH_BUFFER, CHANGE_SCHEMA, SET_DELETE_FLAG
-  }
-
-  StateOutcome checkSchema(Schema recordKeySchema, Schema recordValueSchema) {
-
-    if (!Objects.equals(knownKeySchema, recordKeySchema)) {
-      // key schema change (extremely rare)
-      return StateOutcome.CHANGE_SCHEMA;
-    }
-
-    if (recordValueSchema == null) {
-      // delete (quite rare) - no chance to check value schema change
-      // we only need to track we have deletes in batch so we can flush them when 1st
-      // non delete request comes to preserve order of deletes and updates
-      return config.deleteEnabled
-          ? StateOutcome.SET_DELETE_FLAG
-          : StateOutcome.ADD_RECORD;
-
-    } else if (knownValueSchema == null) { // and record.knownValueSchema() != null
-      // upsert (1st non delete in batch)
-      // may only happens once per batch only if batch starts with deletes
-      return StateOutcome.CHANGE_SCHEMA;
-    } else if (!Objects.equals(knownValueSchema, recordValueSchema)) {
-      // upsert & changed value schema (extremely rare)
-      return StateOutcome.CHANGE_SCHEMA;
-    } else {
-      // upsert & same value schema (common case)
-      return deleteInBuffer
-          ? StateOutcome.FLUSH_BUFFER // upsert following one or more deletes
-          : StateOutcome.ADD_RECORD;
-    }
   }
 
   /**
    * Be aware that...
+   * Any record can have null schema for key or value. It depends on 'pk.mode' settings.
+   * Because use 'delete.enabled=true' which mandates 'pk.mode=record_key',
+   * key schema and value in this case are always not null.
    * .
    * Even 1st record of batch can be deletion (record.knownValueSchema() is null)
    * so we will not be able to extract value schema from it
-   * In fact all buffer in batch can be deletes
+   * In fact all requests in batch can be deletes
    * .
    * From performance point we expect
    * - delete to be rare comparing to inserts and updates
@@ -143,24 +109,24 @@ public class VerticaBufferedRecords {
     final Schema recordKeySchema = record.keySchema();
     final Schema recordValueSchema = record.valueSchema();
 
+    boolean isSchemaChange = (recordKeySchema != null && !recordKeySchema.equals(knownKeySchema))
+        || (recordValueSchema != null && !recordValueSchema.equals(knownValueSchema));
+
     ArrayList<SinkRecord> flushed = new ArrayList<>();
-    StateOutcome outcome = checkSchema(recordKeySchema, recordValueSchema);
-    switch (outcome) {
-      case FLUSH_BUFFER:
-        flushed.addAll(flush());
-        break;
-      case CHANGE_SCHEMA:
-        flushed.addAll(flush());
-        knownKeySchema = recordKeySchema;
-        knownValueSchema = recordValueSchema; // nullable
-        schemaState.close();
-        schemaState = new RecordSchemaDerivedState(recordKeySchema, recordValueSchema);
-        break;
-      case SET_DELETE_FLAG:
-        deleteInBuffer = true;
-        break;
-      default:
-        throw new IllegalStateException("Unsupported " + outcome);
+    if (isSchemaChange) {
+      // flush buffer with existing schema
+      flushed.addAll(flush());
+      // reset/reinitialize schema state
+      knownKeySchema = recordKeySchema;
+      knownValueSchema = recordValueSchema;
+      schemaState.close();
+      schemaState = new RecordSchemaDerivedState(recordKeySchema, recordValueSchema);
+    } else if (record.value() == null) { // isSchemaChange == false
+      // delete record - set a flag but do not flush just yet
+      deleteInBuffer = true;
+    } else if (deleteInBuffer) { // record.value() != null
+      // update record following delete record(s) -> flush buffer to preserve order
+      flushed.addAll(flush());
     }
 
     buffer.add(record);
@@ -190,9 +156,10 @@ public class VerticaBufferedRecords {
     // TODO check if we have to merge updated values from multiple records
     // instead of keeping last and discarding other
     Map<Object, Operation> operations = new HashMap<>();
-    for (int i = buffer.size() - 1; i != 0; --i) { // iterate from latest to oldest
+    for (int i = buffer.size() - 1; i >= 0; --i) { // iterate from latest to oldest
       SinkRecord record = buffer.get(i);
       Object recordKey = record.key();
+      Operation operation = operations.get(recordKey);
       if (operations.get(recordKey) == null) {
         if (record.value() != null) {
           schemaState.insertBinder.bindRecord(record);
@@ -201,6 +168,8 @@ public class VerticaBufferedRecords {
           schemaState.deleteBinder.bindRecord(record);
           operations.put(recordKey, Operation.DELETE);
         }
+      } else {
+        log.debug("Skipping record as later {} exist for this key {}", operation, recordKey);
       }
     }
 
@@ -217,7 +186,7 @@ public class VerticaBufferedRecords {
 
     // 2. Merge temporary table into target table
     int mergeCount = schemaState.mergeStatement.executeUpdate();
-    log.debug("Merged count is " + mergeCount);
+    log.debug("Merged {} records from {} to {}", mergeCount, tmpTableId, tableId);
 
     // 3. Delete(s) from target table
     int totalDeleteCount = 0;
@@ -227,9 +196,14 @@ public class VerticaBufferedRecords {
           totalDeleteCount += updateCount;
         }
       }
+      log.debug("Deleted {} records from {}", mergeCount, tableId);
     }
 
     checkAffectedRowCount(totalUpdateCount + totalDeleteCount, successNoInfo);
+    // We do commit after every flush to clear temporary local merging table
+    // otherwise next round might insert records with same keys into it
+    // which makes merge explode on duplicate keys
+    connection.commit();
 
     final List<SinkRecord> flushedRecords = buffer;
     buffer = new ArrayList<>();
@@ -275,12 +249,6 @@ public class VerticaBufferedRecords {
     private final DatabaseDialect.StatementBinder insertBinder;
     private final PreparedStatement mergeStatement;
 
-
-    /**
-     * @param keySchema   always known
-     * @param valueSchema nullable
-     * @throws SQLException exception
-     */
     RecordSchemaDerivedState(Schema keySchema, Schema valueSchema) throws SQLException {
       FieldsMetadata fieldsMetadata = checkDatabaseSchema(keySchema, valueSchema);
 
@@ -293,14 +261,14 @@ public class VerticaBufferedRecords {
       final String deleteSql = getDeleteSql(fieldsMetadata);
 
       log.debug(
-          "{} INSERT sql: \n{}\nDELETE sql: {}\nMERGE sql: \n{}",
+          "\n{} sql: {}\nDELETE sql: {}\nMERGE sql: {}",
           config.insertMode,
           insertSql,
           deleteSql,
           mergeSql
       );
 
-      // temporary table exist for insert prepared statement creation
+      // temporary table must exist for insert prepared statement
       // drop & create is performed for case that schema changes in the middle of buffer
       dbDialect.recreateTempTable(
           connection,

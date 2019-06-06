@@ -107,7 +107,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   public static class Provider extends FixedScoreProvider {
     public Provider() {
       super(GenericDatabaseDialect.class.getSimpleName(),
-            DatabaseDialectProvider.AVERAGE_MATCHING_SCORE
+          DatabaseDialectProvider.AVERAGE_MATCHING_SCORE
       );
     }
 
@@ -166,7 +166,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       tableTypes = new HashSet<>(config.getList(JdbcSourceTaskConfig.TABLE_TYPE_CONFIG));
     }
     if (config instanceof JdbcSourceConnectorConfig) {
-      mapNumerics = ((JdbcSourceConnectorConfig)config).numericMapping();
+      mapNumerics = ((JdbcSourceConnectorConfig) config).numericMapping();
     } else {
       mapNumerics = NumericMapping.NONE;
     }
@@ -512,7 +512,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     TableId tableId = parseTableIdentifier(tablePattern);
     String catalog = tableId.catalogName() != null ? tableId.catalogName() : catalogPattern;
     String schema = tableId.schemaName() != null ? tableId.schemaName() : schemaPattern;
-    return describeColumns(connection, catalog , schema, tableId.tableName(), columnPattern);
+    return describeColumns(connection, catalog, schema, tableId.tableName(), columnPattern);
   }
 
   @Override
@@ -732,8 +732,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       TableId tableId
   ) throws SQLException {
     Map<ColumnId, ColumnDefinition> columnDefns = describeColumns(connection, tableId.catalogName(),
-                                                                  tableId.schemaName(),
-                                                                  tableId.tableName(), null
+        tableId.schemaName(),
+        tableId.tableName(), null
     );
     if (columnDefns.isEmpty()) {
       return null;
@@ -832,7 +832,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       SchemaBuilder builder
   ) {
     return addFieldToSchema(columnDefn, builder, fieldNameFor(columnDefn), columnDefn.type(),
-                            columnDefn.isOptional()
+        columnDefn.isOptional()
     );
   }
 
@@ -1064,7 +1064,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       ColumnMapping mapping
   ) {
     return columnConverterFor(mapping, mapping.columnDefn(), mapping.columnNumber(),
-                              jdbcDriverInfo().jdbcVersionAtLeast(4, 0)
+        jdbcDriverInfo().jdbcVersionAtLeast(4, 0)
     );
   }
 
@@ -1339,9 +1339,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     builder.append(table);
     builder.append("(");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(ExpressionBuilder.columnNames())
-           .of(keyColumns, nonKeyColumns);
+        .delimitedBy(",")
+        .transformedBy(ExpressionBuilder.columnNames())
+        .of(keyColumns, nonKeyColumns);
     builder.append(") VALUES(");
     builder.appendMultiple(",", "?", keyColumns.size() + nonKeyColumns.size());
     builder.append(")");
@@ -1349,8 +1349,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   }
 
   public String buildDeleteStatement(
-          TableId table,
-          Collection<ColumnId> keyColumns
+      TableId table,
+      Collection<ColumnId> keyColumns
   ) {
     ExpressionBuilder builder = expressionBuilder();
     builder.append("DELETE FROM ");
@@ -1358,9 +1358,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     if (!keyColumns.isEmpty()) {
       builder.append(" WHERE ");
       builder.appendList()
-              .delimitedBy(" AND ")
-              .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
-              .of(keyColumns);
+          .delimitedBy(" AND ")
+          .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
+          .of(keyColumns);
     }
     return builder.toString();
   }
@@ -1376,43 +1376,43 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     builder.append(table);
     builder.append(" SET ");
     builder.appendList()
-           .delimitedBy(", ")
-           .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
-           .of(nonKeyColumns);
+        .delimitedBy(", ")
+        .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
+        .of(nonKeyColumns);
     if (!keyColumns.isEmpty()) {
       builder.append(" WHERE ");
       builder.appendList()
-             .delimitedBy(", ")
-             .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
-             .of(keyColumns);
+          .delimitedBy(", ")
+          .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
+          .of(keyColumns);
     }
     return builder.toString();
   }
 
   @Override
   public String buildUpsertQueryStatement(
-          TableId table,
-          Collection<ColumnId> keyColumns,
-          Collection<ColumnId> nonKeyColumns,
-          Map<String, SinkRecordField> allFields) {
+      TableId table,
+      Collection<ColumnId> keyColumns,
+      Collection<ColumnId> nonKeyColumns,
+      Map<String, SinkRecordField> allFields) {
     throw new UnsupportedOperationException();
   }
 
   @Override
   public StatementBinder statementBinder(
-          PreparedStatement statement,
-          PrimaryKeyMode pkMode,
-          SchemaPair schemaPair,
-          FieldsMetadata fieldsMetadata,
-          InsertMode insertMode
+      PreparedStatement statement,
+      PrimaryKeyMode pkMode,
+      SchemaPair schemaPair,
+      FieldsMetadata fieldsMetadata,
+      InsertMode insertMode
   ) {
     return new PreparedStatementBinder(
-            this,
-            statement,
-            pkMode,
-            schemaPair,
-            fieldsMetadata,
-            insertMode
+        this,
+        statement,
+        pkMode,
+        schemaPair,
+        fieldsMetadata,
+        insertMode
     );
   }
 
@@ -1540,9 +1540,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       builder.append(System.lineSeparator());
       builder.append("PRIMARY KEY(");
       builder.appendList()
-             .delimitedBy(",")
-             .transformedBy(ExpressionBuilder.quote())
-             .of(pkFieldNames);
+          .delimitedBy(",")
+          .transformedBy(ExpressionBuilder.quote())
+          .of(pkFieldNames);
       builder.append(")");
     }
     builder.append(")");
@@ -1587,9 +1587,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     builder.append(table);
     builder.append(" ");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(transform)
-           .of(fields);
+        .delimitedBy(",")
+        .transformedBy(transform)
+        .of(fields);
     return Collections.singletonList(builder.toString());
   }
 

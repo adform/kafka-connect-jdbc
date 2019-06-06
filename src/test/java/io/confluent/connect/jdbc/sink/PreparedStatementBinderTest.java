@@ -18,6 +18,7 @@ package io.confluent.connect.jdbc.sink;
 import java.time.ZoneOffset;
 import java.util.Calendar;
 import java.util.TimeZone;
+
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;

@@ -28,7 +28,6 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -79,80 +78,30 @@ public class BufferedRecords {
   public List<SinkRecord> add(SinkRecord record) throws SQLException {
     final List<SinkRecord> flushed = new ArrayList<>();
 
-    boolean schemaChanged = false;
-    if (!Objects.equals(keySchema, record.keySchema())) {
-      keySchema = record.keySchema();
-      schemaChanged = true;
-    }
-    if (isNull(record.valueSchema())) {
-      // For deletes, both the value and value schema come in as null.
+    final Schema recordKeySchema = record.keySchema();
+    final Schema recordValueSchema = record.valueSchema();
+
+    boolean schemaChanged = (recordKeySchema != null && !recordKeySchema.equals(keySchema))
+            || (recordValueSchema != null && !recordValueSchema.equals(valueSchema));
+
+    if (schemaChanged) {
+      // value schema is not null and has changed. This is a real schema change.
+      flushed.addAll(flush());
+      keySchema = recordKeySchema;
+      valueSchema = recordValueSchema;
+      resetSchemaState(recordKeySchema, recordValueSchema);
+    } else if (record.value() == null) {
+      // For deletes, both the value and value schema come in as null. // NOT TRUE!
       // We don't want to treat this as a schema change if key schemas is the same
       // otherwise we flush unnecessarily.
       if (config.deleteEnabled) {
         deletesInBatch = true;
       }
-    } else if (Objects.equals(valueSchema, record.valueSchema())) {
-      if (config.deleteEnabled && deletesInBatch) {
-        // flush so an insert after a delete of same record isn't lost
-        flushed.addAll(flush());
-      }
-    } else {
-      // value schema is not null and has changed. This is a real schema change.
-      valueSchema = record.valueSchema();
-      schemaChanged = true;
-    }
-
-    if (schemaChanged) {
-      // Each batch needs to have the same schemas, so get the buffered records out
+    } else if (config.deleteEnabled && deletesInBatch) {
+      // flush so an insert after a delete of same record isn't lost
       flushed.addAll(flush());
-
-      // re-initialize everything that depends on the record schema
-      final SchemaPair schemaPair = new SchemaPair(
-              record.keySchema(),
-              record.valueSchema()
-      );
-      fieldsMetadata = FieldsMetadata.extract(
-              tableId.tableName(),
-              config.pkMode,
-              config.pkFields,
-              config.fieldsWhitelist,
-              schemaPair
-      );
-      dbStructure.createOrAmendIfNecessary(
-              config,
-              connection,
-              tableId,
-              fieldsMetadata
-      );
-      final String insertSql = getInsertSql();
-      final String deleteSql = getDeleteSql();
-      log.debug(
-              "{} sql: {} deleteSql: {} meta: {}",
-              config.insertMode,
-              insertSql,
-              deleteSql,
-              fieldsMetadata
-      );
-      close();
-      updatePreparedStatement = dbDialect.createPreparedStatement(connection, insertSql);
-      updateStatementBinder = dbDialect.statementBinder(
-              updatePreparedStatement,
-              config.pkMode,
-              schemaPair,
-              fieldsMetadata,
-              config.insertMode
-      );
-      if (config.deleteEnabled && nonNull(deleteSql)) {
-        deletePreparedStatement = dbDialect.createPreparedStatement(connection, deleteSql);
-        deleteStatementBinder = dbDialect.statementBinder(
-                deletePreparedStatement,
-                config.pkMode,
-                schemaPair,
-                fieldsMetadata,
-                config.insertMode
-        );
-      }
     }
+
     records.add(record);
 
     if (records.size() >= config.batchSize) {
@@ -160,6 +109,7 @@ public class BufferedRecords {
     }
     return flushed;
   }
+
 
   public List<SinkRecord> flush() throws SQLException {
     if (records.isEmpty()) {
@@ -254,6 +204,55 @@ public class BufferedRecords {
     }
   }
 
+  private void resetSchemaState(Schema keySchema, Schema valueSchema) throws SQLException {
+    // re-initialize everything that depends on the record schema
+    final SchemaPair schemaPair = new SchemaPair(
+            keySchema,
+            valueSchema
+    );
+    fieldsMetadata = FieldsMetadata.extract(
+            tableId.tableName(),
+            config.pkMode,
+            config.pkFields,
+            config.fieldsWhitelist,
+            schemaPair
+    );
+    dbStructure.createOrAmendIfNecessary(
+            config,
+            connection,
+            tableId,
+            fieldsMetadata
+    );
+    final String insertSql = getInsertSql();
+    final String deleteSql = getDeleteSql();
+    log.debug(
+            "{} sql: {} deleteSql: {} meta: {}",
+            config.insertMode,
+            insertSql,
+            deleteSql,
+            fieldsMetadata
+    );
+    close();
+    updatePreparedStatement = dbDialect.createPreparedStatement(connection, insertSql);
+    updateStatementBinder = dbDialect.statementBinder(
+            updatePreparedStatement,
+            config.pkMode,
+            schemaPair,
+            fieldsMetadata,
+            config.insertMode
+    );
+    if (config.deleteEnabled && nonNull(deleteSql)) {
+      deletePreparedStatement = dbDialect.createPreparedStatement(connection, deleteSql);
+      deleteStatementBinder = dbDialect.statementBinder(
+              deletePreparedStatement,
+              config.pkMode,
+              schemaPair,
+              fieldsMetadata,
+              config.insertMode
+      );
+    }
+  }
+
   private String getInsertSql() {
     switch (config.insertMode) {
       case INSERT:
@@ -265,9 +264,9 @@ public class BufferedRecords {
       case UPSERT:
         if (fieldsMetadata.keyFieldNames.isEmpty()) {
           throw new ConnectException(String.format(
-              "Write to table '%s' in UPSERT mode requires key field names to be known, check the"
-                  + " primary key configuration",
-              tableId
+                  "Write to table '%s' in UPSERT mode requires key field names to be known"
+                          + ", check the primary key configuration",
+                  tableId
           ));
         }
         try {

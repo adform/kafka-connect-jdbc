@@ -50,10 +50,10 @@ public class DbStructure {
    * @throws SQLException if a DDL operation was deemed necessary but failed
    */
   public boolean createOrAmendIfNecessary(
-          final JdbcSinkConfig config,
-          final Connection connection,
-          final TableId tableId,
-          final FieldsMetadata fieldsMetadata
+      final JdbcSinkConfig config,
+      final Connection connection,
+      final TableId tableId,
+      final FieldsMetadata fieldsMetadata
   ) throws SQLException {
     if (tableDefns.get(connection, tableId) == null) {
       // Table does not yet exist, so attempt to create it ...
@@ -78,14 +78,14 @@ public class DbStructure {
    * @throws SQLException if CREATE failed
    */
   void create(
-          final JdbcSinkConfig config,
-          final Connection connection,
-          final TableId tableId,
-          final FieldsMetadata fieldsMetadata
+      final JdbcSinkConfig config,
+      final Connection connection,
+      final TableId tableId,
+      final FieldsMetadata fieldsMetadata
   ) throws SQLException {
     if (!config.autoCreate) {
       throw new ConnectException(
-              String.format("Table %s is missing and auto-creation is disabled", tableId)
+          String.format("Table %s is missing and auto-creation is disabled", tableId)
       );
     }
     String sql = dbDialect.buildCreateTableStatement(tableId, fieldsMetadata.allFields.values());
@@ -98,11 +98,11 @@ public class DbStructure {
    * @throws SQLException if ALTER was deemed necessary but failed
    */
   boolean amendIfNecessary(
-          final JdbcSinkConfig config,
-          final Connection connection,
-          final TableId tableId,
-          final FieldsMetadata fieldsMetadata,
-          final int maxRetries
+      final JdbcSinkConfig config,
+      final Connection connection,
+      final TableId tableId,
+      final FieldsMetadata fieldsMetadata,
+      final int maxRetries
   ) throws SQLException {
     // NOTE:
     //   The table might have extra columns defined (hopefully with default values), which is not
@@ -120,62 +120,62 @@ public class DbStructure {
     //    }
 
     final Set<SinkRecordField> missingFields = missingFields(
-            fieldsMetadata.allFields.values(),
-            tableDefn.columnNames()
+        fieldsMetadata.allFields.values(),
+        tableDefn.columnNames()
     );
 
     if (missingFields.isEmpty()) {
       return false;
     }
 
-    for (SinkRecordField missingField: missingFields) {
+    for (SinkRecordField missingField : missingFields) {
       if (!missingField.isOptional() && missingField.defaultValue() == null) {
         throw new ConnectException(
-                String.format(
-                        "Cannot ALTER %s to add missing field %s, as it is not optional and "
-                                + "does not have a default value",
-                        tableId, missingField)
+            String.format(
+                "Cannot ALTER %s to add missing field %s, as it is not optional and "
+                    + "does not have a default value",
+                tableId, missingField)
         );
       }
     }
 
     if (!config.autoEvolve) {
       throw new ConnectException(String.format(
-              "Table %s is missing fields (%s) and auto-evolution is disabled",
-              tableId,
-              missingFields
+          "Table %s is missing fields (%s) and auto-evolution is disabled",
+          tableId,
+          missingFields
       ));
     }
 
     final List<String> amendTableQueries = dbDialect.buildAlterTable(tableId, missingFields);
     log.info(
-            "Amending table to add missing fields:{} maxRetries:{} with SQL: {}",
-            missingFields,
-            maxRetries,
-            amendTableQueries
+        "Amending table to add missing fields:{} maxRetries:{} with SQL: {}",
+        missingFields,
+        maxRetries,
+        amendTableQueries
     );
     try {
       dbDialect.applyDdlStatements(connection, amendTableQueries);
     } catch (SQLException sqle) {
       if (maxRetries <= 0) {
         throw new ConnectException(
-                String.format(
-                        "Failed to amend table '%s' to add missing fields: %s",
-                        tableId,
-                        missingFields
-                ),
-                sqle
+            String.format(
+                "Failed to amend table '%s' to add missing fields: %s",
+                tableId,
+                missingFields
+            ),
+            sqle
         );
       }
       log.warn("Amend failed, re-attempting", sqle);
       tableDefns.refresh(connection, tableId);
       // Perhaps there was a race with other tasks to add the columns
       return amendIfNecessary(
-              config,
-              connection,
-              tableId,
-              fieldsMetadata,
-              maxRetries - 1
+          config,
+          connection,
+          tableId,
+          fieldsMetadata,
+          maxRetries - 1
       );
     }
 
@@ -184,8 +184,8 @@ public class DbStructure {
   }
 
   Set<SinkRecordField> missingFields(
-          Collection<SinkRecordField> fields,
-          Set<String> dbColumnNames
+      Collection<SinkRecordField> fields,
+      Set<String> dbColumnNames
   ) {
     final Set<SinkRecordField> missingFields = new HashSet<>();
     for (SinkRecordField field : fields) {
@@ -201,19 +201,19 @@ public class DbStructure {
 
     // check if the missing fields can be located by ignoring case
     Set<String> columnNamesLowerCase = new HashSet<>();
-    for (String columnName: dbColumnNames) {
+    for (String columnName : dbColumnNames) {
       columnNamesLowerCase.add(columnName.toLowerCase());
     }
 
     if (columnNamesLowerCase.size() != dbColumnNames.size()) {
       log.warn(
-              "Table has column names that differ only by case. Original columns={}",
-              dbColumnNames
+          "Table has column names that differ only by case. Original columns={}",
+          dbColumnNames
       );
     }
 
     final Set<SinkRecordField> missingFieldsIgnoreCase = new HashSet<>();
-    for (SinkRecordField missing: missingFields) {
+    for (SinkRecordField missing : missingFields) {
       if (!columnNamesLowerCase.contains(missing.name().toLowerCase())) {
         missingFieldsIgnoreCase.add(missing);
       }
@@ -221,9 +221,9 @@ public class DbStructure {
 
     if (missingFieldsIgnoreCase.size() > 0) {
       log.info(
-              "Unable to find fields {} among column names {}",
-              missingFieldsIgnoreCase,
-              dbColumnNames
+          "Unable to find fields {} among column names {}",
+          missingFieldsIgnoreCase,
+          dbColumnNames
       );
     }
 

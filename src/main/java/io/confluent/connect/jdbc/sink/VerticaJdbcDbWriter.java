@@ -58,8 +58,8 @@ public class VerticaJdbcDbWriter extends JdbcDbWriter {
       VerticaBufferedRecords buffer = bufferByTable.get(tableId);
       if (buffer == null) {
         buffer = new VerticaBufferedRecords(
-                config, tableId, dbDialect, dbStructure,
-                connection, record.keySchema(), record.valueSchema());
+            config, tableId, dbDialect, dbStructure,
+            connection, record.keySchema(), record.valueSchema());
         bufferByTable.put(tableId, buffer);
       }
       buffer.add(record);

@@ -62,11 +62,11 @@ public class BufferedRecords {
   private boolean deletesInBatch = false;
 
   public BufferedRecords(
-          JdbcSinkConfig config,
-          TableId tableId,
-          DatabaseDialect dbDialect,
-          DbStructure dbStructure,
-          Connection connection
+      JdbcSinkConfig config,
+      TableId tableId,
+      DatabaseDialect dbDialect,
+      DbStructure dbStructure,
+      Connection connection
   ) {
     this.tableId = tableId;
     this.config = config;
@@ -82,7 +82,7 @@ public class BufferedRecords {
     final Schema recordValueSchema = record.valueSchema();
 
     boolean schemaChanged = (recordKeySchema != null && !recordKeySchema.equals(keySchema))
-            || (recordValueSchema != null && !recordValueSchema.equals(valueSchema));
+        || (recordValueSchema != null && !recordValueSchema.equals(valueSchema));
 
     if (schemaChanged) {
       // value schema is not null and has changed. This is a real schema change.
@@ -129,21 +129,21 @@ public class BufferedRecords {
 
     final long expectedCount = updateRecordCount();
     log.trace("{} records:{} resulting in totalUpdateCount:{} totalDeleteCount:{}",
-            config.insertMode, records.size(), totalUpdateCount, totalDeleteCount
+        config.insertMode, records.size(), totalUpdateCount, totalDeleteCount
     );
     if (totalUpdateCount.filter(total -> total != expectedCount).isPresent()
-            && config.insertMode == INSERT) {
+        && config.insertMode == INSERT) {
       throw new ConnectException(String.format(
-              "Update count (%d) did not sum up to total number of records inserted (%d)",
-              totalUpdateCount.get(),
-              expectedCount
+          "Update count (%d) did not sum up to total number of records inserted (%d)",
+          totalUpdateCount.get(),
+          expectedCount
       ));
     }
     if (!totalUpdateCount.isPresent()) {
       log.info(
-              "{} records:{} , but no count of the number of rows it affected is available",
-              config.insertMode,
-              records.size()
+          "{} records:{} , but no count of the number of rows it affected is available",
+          config.insertMode,
+          records.size()
       );
     }
 
@@ -161,8 +161,8 @@ public class BufferedRecords {
     for (int updateCount : updatePreparedStatement.executeBatch()) {
       if (updateCount != Statement.SUCCESS_NO_INFO) {
         count = count.isPresent()
-                ? count.map(total -> total + updateCount)
-                : Optional.of((long) updateCount);
+            ? count.map(total -> total + updateCount)
+            : Optional.of((long) updateCount);
       }
     }
     return count;
@@ -182,17 +182,17 @@ public class BufferedRecords {
 
   private long updateRecordCount() {
     return records
-            .stream()
-            // ignore deletes
-            .filter(record -> nonNull(record.value()) || !config.deleteEnabled)
-            .count();
+        .stream()
+        // ignore deletes
+        .filter(record -> nonNull(record.value()) || !config.deleteEnabled)
+        .count();
   }
 
   public void close() throws SQLException {
     log.info(
-            "Closing BufferedRecords with updatePreparedStatement: {} deletePreparedStatement: {}",
-            updatePreparedStatement,
-            deletePreparedStatement
+        "Closing BufferedRecords with updatePreparedStatement: {} deletePreparedStatement: {}",
+        updatePreparedStatement,
+        deletePreparedStatement
     );
     if (nonNull(updatePreparedStatement)) {
       updatePreparedStatement.close();
@@ -207,48 +207,48 @@ public class BufferedRecords {
   private void resetSchemaState(Schema keySchema, Schema valueSchema) throws SQLException {
     // re-initialize everything that depends on the record schema
     final SchemaPair schemaPair = new SchemaPair(
-            keySchema,
-            valueSchema
+        keySchema,
+        valueSchema
     );
     fieldsMetadata = FieldsMetadata.extract(
-            tableId.tableName(),
-            config.pkMode,
-            config.pkFields,
-            config.fieldsWhitelist,
-            schemaPair
+        tableId.tableName(),
+        config.pkMode,
+        config.pkFields,
+        config.fieldsWhitelist,
+        schemaPair
     );
     dbStructure.createOrAmendIfNecessary(
-            config,
-            connection,
-            tableId,
-            fieldsMetadata
+        config,
+        connection,
+        tableId,
+        fieldsMetadata
     );
     final String insertSql = getInsertSql();
     final String deleteSql = getDeleteSql();
     log.debug(
-            "{} sql: {} deleteSql: {} meta: {}",
-            config.insertMode,
-            insertSql,
-            deleteSql,
-            fieldsMetadata
+        "{} sql: {} deleteSql: {} meta: {}",
+        config.insertMode,
+        insertSql,
+        deleteSql,
+        fieldsMetadata
     );
     close();
     updatePreparedStatement = dbDialect.createPreparedStatement(connection, insertSql);
     updateStatementBinder = dbDialect.statementBinder(
-            updatePreparedStatement,
-            config.pkMode,
-            schemaPair,
-            fieldsMetadata,
-            config.insertMode
+        updatePreparedStatement,
+        config.pkMode,
+        schemaPair,
+        fieldsMetadata,
+        config.insertMode
     );
     if (config.deleteEnabled && nonNull(deleteSql)) {
       deletePreparedStatement = dbDialect.createPreparedStatement(connection, deleteSql);
       deleteStatementBinder = dbDialect.statementBinder(
-              deletePreparedStatement,
-              config.pkMode,
-              schemaPair,
-              fieldsMetadata,
-              config.insertMode
+          deletePreparedStatement,
+          config.pkMode,
+          schemaPair,
+          fieldsMetadata,
+          config.insertMode
       );
     }
   }
@@ -257,37 +257,37 @@ public class BufferedRecords {
     switch (config.insertMode) {
       case INSERT:
         return dbDialect.buildInsertStatement(
-                tableId,
-                asColumns(fieldsMetadata.keyFieldNames),
-                asColumns(fieldsMetadata.nonKeyFieldNames)
+            tableId,
+            asColumns(fieldsMetadata.keyFieldNames),
+            asColumns(fieldsMetadata.nonKeyFieldNames)
         );
       case UPSERT:
         if (fieldsMetadata.keyFieldNames.isEmpty()) {
           throw new ConnectException(String.format(
-                  "Write to table '%s' in UPSERT mode requires key field names to be known"
-                          + ", check the primary key configuration",
-                  tableId
+              "Write to table '%s' in UPSERT mode requires key field names to be known"
+                  + ", check the primary key configuration",
+              tableId
           ));
         }
         try {
           return dbDialect.buildUpsertQueryStatement(
-                  tableId,
-                  asColumns(fieldsMetadata.keyFieldNames),
-                  asColumns(fieldsMetadata.nonKeyFieldNames),
-                  fieldsMetadata.allFields
+              tableId,
+              asColumns(fieldsMetadata.keyFieldNames),
+              asColumns(fieldsMetadata.nonKeyFieldNames),
+              fieldsMetadata.allFields
           );
         } catch (UnsupportedOperationException e) {
           throw new ConnectException(String.format(
-                  "Write to table '%s' in UPSERT mode is not supported with the %s dialect.",
-                  tableId,
-                  dbDialect.name()
+              "Write to table '%s' in UPSERT mode is not supported with the %s dialect.",
+              tableId,
+              dbDialect.name()
           ));
         }
       case UPDATE:
         return dbDialect.buildUpdateStatement(
-                tableId,
-                asColumns(fieldsMetadata.keyFieldNames),
-                asColumns(fieldsMetadata.nonKeyFieldNames)
+            tableId,
+            asColumns(fieldsMetadata.keyFieldNames),
+            asColumns(fieldsMetadata.nonKeyFieldNames)
         );
       default:
         throw new ConnectException("Invalid insert mode");
@@ -304,14 +304,14 @@ public class BufferedRecords {
           }
           try {
             sql = dbDialect.buildDeleteStatement(
-                    tableId,
-                    asColumns(fieldsMetadata.keyFieldNames)
+                tableId,
+                asColumns(fieldsMetadata.keyFieldNames)
             );
           } catch (UnsupportedOperationException e) {
             throw new ConnectException(String.format(
-                    "Deletes to table '%s' are not supported with the %s dialect.",
-                    tableId,
-                    dbDialect.name()
+                "Deletes to table '%s' are not supported with the %s dialect.",
+                tableId,
+                dbDialect.name()
             ));
           }
           break;
@@ -325,7 +325,7 @@ public class BufferedRecords {
 
   private Collection<ColumnId> asColumns(Collection<String> names) {
     return names.stream()
-            .map(name -> new ColumnId(tableId, name))
-            .collect(Collectors.toList());
+        .map(name -> new ColumnId(tableId, name))
+        .collect(Collectors.toList());
   }
 }

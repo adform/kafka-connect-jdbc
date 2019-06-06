@@ -41,12 +41,12 @@ public class PreparedStatementBinder implements StatementBinder {
   private final DatabaseDialect dialect;
 
   public PreparedStatementBinder(
-          DatabaseDialect dialect,
-          PreparedStatement statement,
-          JdbcSinkConfig.PrimaryKeyMode pkMode,
-          SchemaPair schemaPair,
-          FieldsMetadata fieldsMetadata,
-          JdbcSinkConfig.InsertMode insertMode
+      DatabaseDialect dialect,
+      PreparedStatement statement,
+      JdbcSinkConfig.PrimaryKeyMode pkMode,
+      SchemaPair schemaPair,
+      FieldsMetadata fieldsMetadata,
+      JdbcSinkConfig.InsertMode insertMode
   ) {
     this.dialect = dialect;
     this.pkMode = pkMode;
@@ -134,9 +134,9 @@ public class PreparedStatementBinder implements StatementBinder {
   }
 
   protected int bindNonKeyFields(
-          SinkRecord record,
-          Struct valueStruct,
-          int index
+      SinkRecord record,
+      Struct valueStruct,
+      int index
   ) throws SQLException {
     for (final String fieldName : fieldsMetadata.nonKeyFieldNames) {
       final Field field = record.valueSchema().field(fieldName);

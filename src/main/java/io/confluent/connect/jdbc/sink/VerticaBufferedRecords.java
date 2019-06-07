@@ -151,10 +151,7 @@ public class VerticaBufferedRecords {
       return Collections.emptyList();
     }
 
-    // Temporary local table must not contain duplicate keys for MERGE operation
-    // -> Keep only last record
-    // TODO check if we have to merge updated values from multiple records
-    // instead of keeping last and discarding other
+    // Local table must not contain duplicate keys for MERGE operation -> Keep only last record
     Map<Object, Operation> operations = new HashMap<>();
     for (int i = buffer.size() - 1; i >= 0; --i) { // iterate from latest to oldest
       SinkRecord record = buffer.get(i);

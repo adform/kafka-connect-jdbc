@@ -26,7 +26,7 @@
         <version>5.0.0</version>
     </parent>
 
-    <groupId>io.confluent</groupId>
+    <groupId>io.confluent.adform</groupId>
     <artifactId>kafka-connect-jdbc</artifactId>
     <packaging>jar</packaging>
     <name>kafka-connect-jdbc</name>
@@ -156,7 +156,7 @@
                 <configuration>
                     <compilerArgs>
                         <arg>-Xlint:all</arg>
-                        <arg>-Werror</arg>
+                        <!--<arg>-Werror</arg>-->
                     </compilerArgs>
                 </configuration>
             </plugin>

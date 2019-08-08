@@ -16,7 +16,7 @@
 
 package io.confluent.connect.jdbc.sink;
 
-import io.confluent.connect.jdbc.dialect.VerticaMergeDatabaseDialect;
+import io.confluent.connect.jdbc.dialect.VerticaDatabaseDialect;
 import io.confluent.connect.jdbc.util.TableId;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.slf4j.Logger;
@@ -33,15 +33,15 @@ import java.util.Map;
  */
 public class VerticaJdbcDbWriter extends JdbcDbWriter {
   private JdbcSinkConfig config;
-  private VerticaMergeDatabaseDialect dbDialect;
+  private VerticaDatabaseDialect dbDialect;
   private DbStructure dbStructure;
 
   private static final Logger log = LoggerFactory.getLogger(VerticaJdbcDbWriter.class);
 
   VerticaJdbcDbWriter(
-      JdbcSinkConfig config,
-      VerticaMergeDatabaseDialect dbDialect,
-      DbStructure dbStructure) {
+          JdbcSinkConfig config,
+          VerticaDatabaseDialect dbDialect,
+          DbStructure dbStructure) {
     super(config, dbDialect, dbStructure);
     this.config = config;
     this.dbDialect = dbDialect;
@@ -51,21 +51,21 @@ public class VerticaJdbcDbWriter extends JdbcDbWriter {
   void write(final Collection<SinkRecord> records) throws SQLException {
     final Connection connection = cachedConnectionProvider.getConnection();
 
-    final Map<TableId, VerticaBufferedRecords> bufferByTable = new HashMap<>();
+    final Map<TableId, VerticaBulkOpsBufferedRecords> bufferByTable = new HashMap<>();
     log.debug("{} records to write", records.size());
     for (SinkRecord record : records) {
       final TableId tableId = destinationTable(record.topic());
-      VerticaBufferedRecords buffer = bufferByTable.get(tableId);
+      VerticaBulkOpsBufferedRecords buffer = bufferByTable.get(tableId);
       if (buffer == null) {
-        buffer = new VerticaBufferedRecords(
+        buffer = new VerticaBulkOpsBufferedRecords(
             config, tableId, dbDialect, dbStructure,
             connection, record.keySchema(), record.valueSchema());
         bufferByTable.put(tableId, buffer);
       }
       buffer.add(record);
     }
-    for (Map.Entry<TableId, VerticaBufferedRecords> entry : bufferByTable.entrySet()) {
-      VerticaBufferedRecords buffer = entry.getValue();
+    for (Map.Entry<TableId, VerticaBulkOpsBufferedRecords> entry : bufferByTable.entrySet()) {
+      VerticaBulkOpsBufferedRecords buffer = entry.getValue();
       log.debug("Flushing records into {}", entry.getKey());
       buffer.flush();
       buffer.close();

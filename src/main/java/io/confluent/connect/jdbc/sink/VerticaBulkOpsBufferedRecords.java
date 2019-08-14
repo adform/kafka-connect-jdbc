@@ -1,7 +1,7 @@
 package io.confluent.connect.jdbc.sink;
 
 import io.confluent.connect.jdbc.dialect.DatabaseDialect;
-import io.confluent.connect.jdbc.dialect.VerticaDatabaseDialect;
+import io.confluent.connect.jdbc.dialect.VerticaTempTableDatabaseDialect;
 import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
 import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
 import io.confluent.connect.jdbc.util.ColumnId;
@@ -33,7 +33,7 @@ public class VerticaBulkOpsBufferedRecords {
     private final TableId tableId;
     private final TableId tmpTableId;
     private final JdbcSinkConfig config;
-    private final VerticaDatabaseDialect dbDialect;
+    private final VerticaTempTableDatabaseDialect dbDialect;
     private final DbStructure dbStructure;
     private final Connection connection;
 
@@ -43,13 +43,11 @@ public class VerticaBulkOpsBufferedRecords {
     private Schema knownKeySchema;
     private Schema knownValueSchema;
     private VerticaBulkOpsBufferedRecords.RecordSchemaDerivedState schemaState;
-    // flag that we have delete record in buffer
-    private boolean deleteInBuffer = false;
 
     public VerticaBulkOpsBufferedRecords(
             JdbcSinkConfig config,
             TableId tableId,
-            VerticaDatabaseDialect dbDialect,
+            VerticaTempTableDatabaseDialect dbDialect,
             DbStructure dbStructure,
             Connection connection,
             Schema keySchema,
@@ -68,20 +66,6 @@ public class VerticaBulkOpsBufferedRecords {
         this.schemaState = new VerticaBulkOpsBufferedRecords.RecordSchemaDerivedState(keySchema, valueSchema);
     }
 
-    /**
-     * Be aware that...
-     * Any record can have null schema for key or value. It depends on 'pk.mode' settings.
-     * Because use 'delete.enabled=true' which mandates 'pk.mode=record_key',
-     * key schema and value in this case are always not null.
-     * .
-     * Even 1st record of batch can be deletion (record.knownValueSchema() is null)
-     * so we will not be able to extract value schema from it
-     * In fact all requests in batch can be deletes
-     * .
-     * From performance point we expect
-     * - delete to be rare comparing to inserts and updates
-     * - schema changes in batch are extremely rare
-     */
     public List<SinkRecord> add(SinkRecord record) throws SQLException {
 
         final Schema recordKeySchema = record.keySchema();
@@ -99,12 +83,6 @@ public class VerticaBulkOpsBufferedRecords {
             knownValueSchema = recordValueSchema;
             schemaState.close();
             schemaState = new VerticaBulkOpsBufferedRecords.RecordSchemaDerivedState(recordKeySchema, recordValueSchema);
-        } else if (record.value() == null) { // isSchemaChange == false
-            // delete record - set a flag but do not flush just yet
-            deleteInBuffer = true;
-        } else if (deleteInBuffer) { // record.value() != null
-            // update record following delete record(s) -> flush buffer to preserve order
-            flushed.addAll(flush());
         }
 
         if (record.value() == null) {
@@ -116,7 +94,7 @@ public class VerticaBulkOpsBufferedRecords {
         }
 
         if ((insertOps.size() + deleteOps.size()) >= config.batchSize) {
-            log.debug("Flushing buffered buffer after exceeding configured batch size {}.",
+            log.info("Flushing buffered buffer after exceeding configured batch size {}.",
                     config.batchSize);
             flushed.addAll(flush());
         }
@@ -132,42 +110,67 @@ public class VerticaBulkOpsBufferedRecords {
             return Collections.emptyList();
         }
 
+        log.debug("TO DELETE: {}, TO INSERT: {}", deleteOps.size(), insertOps.size());
         for (Map.Entry<Object, SinkRecord> e : deleteOps.entrySet()) {
-            schemaState.bulkDeleteBinder.bindRecord(e.getValue());
+            schemaState.bulkTmpInsertBinder.bindRecord(e.getValue());
         }
         for (Map.Entry<Object, SinkRecord> e : insertOps.entrySet()) {
-            schemaState.bulkDeleteBinder.bindRecord(e.getValue());
+            SinkRecord toErase = e.getValue();
+            SinkRecord sinkRecord = toErase.newRecord(
+                    toErase.topic(),
+                    toErase.kafkaPartition(),
+                    toErase.keySchema(),
+                    toErase.key(),
+                    toErase.valueSchema(),
+                    null,
+                    toErase.timestamp());
+            schemaState.bulkTmpInsertBinder.bindRecord(sinkRecord);
         }
         for (Map.Entry<Object, SinkRecord> e : insertOps.entrySet()) {
             schemaState.bulkInsertBinder.bindRecord(e.getValue());
         }
-
-
-        //1. Delete
-        int totalDeleteCount = 0;
-        for (int updateCount : schemaState.bulkDeleteStatement.executeBatch()) {
+        //1. Insert into tem
+        int totalACount = 0;
+        for (int updateCount : schemaState.bulkTmpInsertStatement.executeBatch()) {
             if (updateCount != Statement.SUCCESS_NO_INFO) {
-                totalDeleteCount += updateCount;
+                totalACount += updateCount;
             }
         }
+        log.debug("INSERTED INTO TMP: {}", totalACount);
 
+        //2. Bulk delete from temp
+        int deletedRecords;
 
-        //2. Bulk delete all records with sub query
+        try {
+            deletedRecords = schemaState.bulkDeleteStatement.executeUpdate();
+        } catch (SQLException e) {
+            log.error(e.getSQLState());
+            throw e;
+        }
+        boolean deleteSuccess = deletedRecords == (deleteOps.size() + insertOps.size());
+        log.debug("DELETE SUCCESS: {}, DELETED RECORDS: {}", deleteSuccess, deletedRecords);
+
+        //3. Bulk insert
         int totalInsertCount = 0;
         for (int updateCount : schemaState.bulkInsertStatement.executeBatch()) {
             if (updateCount != Statement.SUCCESS_NO_INFO) {
                 totalInsertCount += updateCount;
             }
         }
+        log.debug("INSERTED INTO DESTINATION: {}", totalInsertCount);
 
-        checkAffectedRowCount(totalInsertCount + totalDeleteCount, true);
+        boolean truncatedTempSuccess;
+        try {
+            truncatedTempSuccess = schemaState.truncateStatement.execute();
+        } catch (SQLException e) {
+            log.error("TRUNCATED ERROR {}", e.getSQLState());
+            throw e;
+        }
+        log.debug("TRUNCATE SUCCESS: {}", truncatedTempSuccess);
 
+        checkAffectedRowCount(deletedRecords, totalInsertCount, truncatedTempSuccess);
 
-        // We do commit after every flush to clear temporary local merging table
-        // otherwise next round might insert records with same keys into it
-        // which makes merge explode on duplicate keys
         connection.commit();
-
 
         final List<SinkRecord> flushedRecords = new LinkedList<>();
         flushedRecords.addAll(new ArrayList<>(deleteOps.values()));
@@ -175,35 +178,21 @@ public class VerticaBulkOpsBufferedRecords {
         return flushedRecords;
     }
 
-    private void checkAffectedRowCount(int totalCount, boolean successNoInfo) {
-        int total = deleteOps.size() + insertOps.size() + insertOps.size();
-        if (totalCount != total && !successNoInfo) {
-            switch (config.insertMode) {
-                case INSERT:
-                    throw new ConnectException(String.format(
-                            "Row count (%d) did not sum up to total number of buffer inserted/deleted (%d)",
-                            totalCount,
-                            total
-                    ));
-                case UPSERT:
-                case UPDATE:
-                    log.debug(
-                            "{}/deleted buffer:{} resulting in in totalUpdateCount:{}",
-                            config.insertMode,
-                            total,
-                            totalCount
-                    );
-                    break;
-                default:
-                    throw new ConnectException("Unknown insert mode: " + config.insertMode);
-            }
-        }
-        if (successNoInfo) {
-            log.info(
-                    "{} buffer:{} , but no count of the number of rows it affected is available",
-                    config.insertMode,
-                    total
-            );
+    private void checkAffectedRowCount(int deletedRecords, int insertedRecords, boolean truncate) {
+        if(deletedRecords > deleteOps.size() + insertOps.size()){
+            throw new ConnectException(String.format(
+                    "Deleted row count (%d) did not sum up to total number of buffer inserted/deleted (%d)",
+                    deletedRecords,
+                    deleteOps.size() + insertOps.size()
+            ));
+        } else if (insertedRecords != insertOps.size()) {
+            throw new ConnectException(String.format(
+                    "Inserted count (%d) did not sum up to total number of buffer inserted/deleted (%d)",
+                    insertedRecords,
+                    insertOps.size()
+            ));
+        } else if (truncate) {
+            throw new ConnectException("Temp table not truncated");
         }
     }
 
@@ -239,6 +228,21 @@ public class VerticaBulkOpsBufferedRecords {
     }
 
     /**
+     * Inserts go into temporary local table.
+     */
+    private String getTempInsertSql(FieldsMetadata fieldsMetadata) {
+        return dbDialect.buildInsertStatement(
+                tmpTableId,
+                asColumns(fieldsMetadata.keyFieldNames),
+                Collections.emptyList()
+        );
+    }
+
+    private String getTruncateSql(TableId tableId) {
+        return dbDialect.truncateTableStatement(tableId);
+    }
+
+    /**
      * Deletes are slow and will go into directly into target table
      * but we have to do it to preserve order of operations.
      */
@@ -254,8 +258,9 @@ public class VerticaBulkOpsBufferedRecords {
                     if (fieldsMetadata.keyFieldNames.isEmpty()) {
                         throw new ConnectException("Require primary keys to support delete");
                     }
-                    sql = dbDialect.buildDeleteStatement(
+                    sql = dbDialect.buildBulkDeleteStatement(
                             tableId,
+                            tmpTableId,
                             asColumns(fieldsMetadata.keyFieldNames)
                     );
                     break;
@@ -272,15 +277,13 @@ public class VerticaBulkOpsBufferedRecords {
                 .collect(Collectors.toList());
     }
 
-    enum Operation {
-        UPSERT, DELETE
-    }
-
     class RecordSchemaDerivedState {
         private final PreparedStatement bulkDeleteStatement;
-        private final DatabaseDialect.StatementBinder bulkDeleteBinder;
         private final PreparedStatement bulkInsertStatement;
+        private final PreparedStatement truncateStatement;
         private final DatabaseDialect.StatementBinder bulkInsertBinder;
+        private final PreparedStatement bulkTmpInsertStatement;
+        private final DatabaseDialect.StatementBinder bulkTmpInsertBinder;
 
         RecordSchemaDerivedState(Schema keySchema, Schema valueSchema) throws SQLException {
             FieldsMetadata fieldsMetadata = checkDatabaseSchema(keySchema, valueSchema);
@@ -289,6 +292,8 @@ public class VerticaBulkOpsBufferedRecords {
 
             final String deleteSql = getDeleteSql(fieldsMetadata);
 
+            final String truncateSql = getTruncateSql(tmpTableId);
+
             log.debug(
                     "\n{} sql: {}\nDELETE sql: {}",
                     config.insertMode,
@@ -296,21 +301,35 @@ public class VerticaBulkOpsBufferedRecords {
                     deleteSql
             );
 
+            // temporary table must exist for insert prepared statement
+            // drop & create is performed for case that schema changes in the middle of buffer
+            dbDialect.recreateTempTable(
+                    connection,
+                    tmpTableId.tableName(),
+                    fieldsMetadata.allFields.values(),
+                    true);
+
             SchemaPair schemaPair = new SchemaPair(keySchema, valueSchema);
 
             bulkDeleteStatement = config.deleteEnabled
                     ? connection.prepareStatement(deleteSql) : null;
-            bulkDeleteBinder = dbDialect.statementBinder(
-                    bulkDeleteStatement,
+
+            truncateStatement = config.deleteEnabled
+                    ? connection.prepareStatement(truncateSql) : null;
+
+
+            bulkInsertStatement = connection.prepareStatement(insertSql);
+            bulkInsertBinder = dbDialect.statementBinder(
+                    bulkInsertStatement,
                     config.pkMode,
                     schemaPair,
                     fieldsMetadata,
                     config.insertMode
             );
 
-            bulkInsertStatement = connection.prepareStatement(insertSql);
-            bulkInsertBinder = dbDialect.statementBinder(
-                    bulkInsertStatement,
+            bulkTmpInsertStatement = connection.prepareStatement(getTempInsertSql(fieldsMetadata));
+            bulkTmpInsertBinder = dbDialect.statementBinder(
+                    bulkTmpInsertStatement,
                     config.pkMode,
                     schemaPair,
                     fieldsMetadata,
@@ -323,8 +342,14 @@ public class VerticaBulkOpsBufferedRecords {
             if (bulkInsertStatement != null) {
                 bulkInsertStatement.close();
             }
+            if (bulkTmpInsertStatement != null) {
+                bulkTmpInsertStatement.close();
+            }
             if (bulkDeleteStatement != null) {
                 bulkDeleteStatement.close();
+            }
+            if (truncateStatement != null) {
+                truncateStatement.close();
             }
         }
     }

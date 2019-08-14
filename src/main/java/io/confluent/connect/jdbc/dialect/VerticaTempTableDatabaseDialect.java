@@ -27,57 +27,16 @@ import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
+import java.util.stream.Collectors;
 
-public class VerticaMergeDatabaseDialect extends VerticaDatabaseDialect {
+public class VerticaTempTableDatabaseDialect extends VerticaDatabaseDialect {
   /**
    * Create a new dialect instance with the given connector configuration.
    *
    * @param config the connector configuration; may not be null
    */
-  public VerticaMergeDatabaseDialect(AbstractConfig config) {
+  public VerticaTempTableDatabaseDialect(AbstractConfig config) {
     super(config);
-  }
-
-  /**
-   * @param sourceTable table to merge from (local temporary table)
-   * @param targetTable table to merge into
-   * @param keyColumns primary key columns to join on
-   * @param nonKeyColumns columns to be merged
-   * @return MERGE SQL string
-   */
-  public String buildMergeTableStatement(
-      TableId sourceTable,
-      TableId targetTable,
-      Collection<ColumnId> keyColumns,
-      Collection<ColumnId> nonKeyColumns) {
-    ExpressionBuilder builder = expressionBuilder();
-    builder.append("MERGE INTO ");
-    builder.append(targetTable);
-    builder.append(" AS target USING ");
-    builder.append(sourceTable);
-    builder.append(" AS incoming ON (");
-    builder.appendList()
-        .delimitedBy(" AND ")
-        .transformedBy(this::transformAs)
-        .of(keyColumns);
-    builder.append(")");
-    builder.append(" WHEN MATCHED THEN UPDATE SET ");
-    builder.appendList()
-        .delimitedBy(",")
-        .transformedBy(this::transformUpdate)
-        .of(nonKeyColumns, keyColumns);
-    builder.append(" WHEN NOT MATCHED THEN INSERT (");
-    builder.appendList()
-        .delimitedBy(", ")
-        .transformedBy(ExpressionBuilder.columnNamesWithPrefix(""))
-        .of(nonKeyColumns, keyColumns);
-    builder.append(") VALUES (");
-    builder.appendList()
-        .delimitedBy(",")
-        .transformedBy(ExpressionBuilder.columnNamesWithPrefix("incoming."))
-        .of(nonKeyColumns, keyColumns);
-    builder.append(");");
-    return builder.toString();
   }
 
   /**
@@ -93,7 +52,6 @@ public class VerticaMergeDatabaseDialect extends VerticaDatabaseDialect {
       boolean preserveOnCommit) throws SQLException {
     String dropSql = "DROP TABLE IF EXISTS " + table;
     String createSql = buildCreateTempTableStatement(table, fields, preserveOnCommit);
-    //log.debug("Table SQL {}", createSql);
     applyDdlStatements(connection, Arrays.asList(dropSql, createSql));
   }
 
@@ -107,7 +65,7 @@ public class VerticaMergeDatabaseDialect extends VerticaDatabaseDialect {
     builder.append("CREATE LOCAL TEMPORARY TABLE IF NOT EXISTS ");
     builder.append(table);
     builder.append(" (");
-    writeColumnsSpec(builder, fields);
+      writeColumnsSpec(builder, fields.stream().filter(SinkRecordField::isPrimaryKey).collect(Collectors.toList()));
     if (!pkFieldNames.isEmpty()) {
       builder.append(",");
       builder.append(System.lineSeparator());
@@ -123,19 +81,6 @@ public class VerticaMergeDatabaseDialect extends VerticaDatabaseDialect {
       builder.append(" ON COMMIT PRESERVE ROWS");
     }
     return builder.toString();
-  }
-
-  private void transformAs(ExpressionBuilder builder, ColumnId col) {
-    builder.append("target.")
-        .appendIdentifierQuoted(col.name())
-        .append("=incoming.")
-        .appendIdentifierQuoted(col.name());
-  }
-
-  private void transformUpdate(ExpressionBuilder builder, ColumnId col) {
-    builder.appendIdentifierQuoted(col.name())
-        .append("=incoming.")
-        .appendIdentifierQuoted(col.name());
   }
 
 }

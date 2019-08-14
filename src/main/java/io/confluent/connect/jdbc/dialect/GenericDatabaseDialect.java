@@ -16,6 +16,30 @@
 
 package io.confluent.connect.jdbc.dialect;
 
+import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.FixedScoreProvider;
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig;
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig.InsertMode;
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig.PrimaryKeyMode;
+import io.confluent.connect.jdbc.sink.PreparedStatementBinder;
+import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
+import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
+import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
+import io.confluent.connect.jdbc.source.ColumnMapping;
+import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig;
+import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig.NumericMapping;
+import io.confluent.connect.jdbc.source.JdbcSourceTaskConfig;
+import io.confluent.connect.jdbc.source.TimestampIncrementingCriteria;
+import io.confluent.connect.jdbc.util.ColumnDefinition;
+import io.confluent.connect.jdbc.util.ColumnDefinition.Mutability;
+import io.confluent.connect.jdbc.util.ColumnDefinition.Nullability;
+import io.confluent.connect.jdbc.util.ColumnId;
+import io.confluent.connect.jdbc.util.DateTimeUtils;
+import io.confluent.connect.jdbc.util.ExpressionBuilder;
+import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
+import io.confluent.connect.jdbc.util.IdentifierRules;
+import io.confluent.connect.jdbc.util.JdbcDriverInfo;
+import io.confluent.connect.jdbc.util.TableDefinition;
+import io.confluent.connect.jdbc.util.TableId;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.types.Password;
 import org.apache.kafka.connect.data.Date;
@@ -59,33 +83,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
-
-import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.FixedScoreProvider;
-import io.confluent.connect.jdbc.sink.JdbcSinkConfig;
-import io.confluent.connect.jdbc.sink.JdbcSinkConfig.InsertMode;
-import io.confluent.connect.jdbc.sink.JdbcSinkConfig.PrimaryKeyMode;
-import io.confluent.connect.jdbc.sink.PreparedStatementBinder;
-import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
-import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
-import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
-import io.confluent.connect.jdbc.source.ColumnMapping;
-import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig;
-import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig.NumericMapping;
-import io.confluent.connect.jdbc.source.JdbcSourceTaskConfig;
-import io.confluent.connect.jdbc.source.TimestampIncrementingCriteria;
-import io.confluent.connect.jdbc.util.ColumnDefinition;
-import io.confluent.connect.jdbc.util.ColumnDefinition.Mutability;
-import io.confluent.connect.jdbc.util.ColumnDefinition.Nullability;
-import io.confluent.connect.jdbc.util.ColumnId;
-import io.confluent.connect.jdbc.util.DateTimeUtils;
-import io.confluent.connect.jdbc.util.ExpressionBuilder;
-import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
-import io.confluent.connect.jdbc.util.IdentifierRules;
-import io.confluent.connect.jdbc.util.JdbcDriverInfo;
-import io.confluent.connect.jdbc.util.TableDefinition;
-import io.confluent.connect.jdbc.util.TableId;
 
 /**
  * A {@link DatabaseDialect} implementation that provides functionality based upon JDBC and SQL.
@@ -1365,7 +1365,43 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     return builder.toString();
   }
 
-  @Override
+    public String buildBulkDeleteStatement(
+            TableId table,
+            TableId tmpTable,
+            Collection<ColumnId> keyColumns
+    ) {
+        StringJoiner joiner = new StringJoiner(" AND ");
+        ExpressionBuilder builder = expressionBuilder();
+        ExpressionBuilder builderName = expressionBuilder();
+        String tableName = builderName.append(table).toString();
+        builder.append("DELETE FROM ");
+        builder.append(table);
+        if (!keyColumns.isEmpty()) {
+            builder.append(" WHERE ");
+            builder.append("EXISTS (SELECT 1 FROM ");
+            builder.append(tmpTable);
+            builder.append(" tmp WHERE ");
+            keyColumns
+                    .stream()
+                    .map(columnId -> tableName + "." + columnId.name() + "=tmp." + columnId.name())
+                    .forEach(joiner::add);
+            builder.append(joiner.toString());
+            builder.append(")");
+        }
+        return builder.toString();
+    }
+
+    public String truncateTableStatement(
+            TableId table
+    ) {
+        ExpressionBuilder builder = expressionBuilder();
+        builder.append("TRUNCATE TABLE ");
+        builder.append(table);
+        return builder.toString();
+    }
+
+
+    @Override
   public String buildUpdateStatement(
       TableId table,
       Collection<ColumnId> keyColumns,

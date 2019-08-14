@@ -16,7 +16,7 @@
 
 package io.confluent.connect.jdbc.sink;
 
-import io.confluent.connect.jdbc.dialect.VerticaMergeDatabaseDialect;
+import io.confluent.connect.jdbc.dialect.VerticaTempTableDatabaseDialect;
 
 /**
  * Just change JdbcDbWriter to VerticaJdbcDbWriter in {@link #initWriter()}
@@ -25,7 +25,7 @@ public class VerticaSinkTask extends JdbcSinkTask {
 
   @Override
   void initWriter() {
-    VerticaMergeDatabaseDialect dialect = new VerticaMergeDatabaseDialect(config);
+    VerticaTempTableDatabaseDialect dialect = new VerticaTempTableDatabaseDialect(config);
     this.dialect = dialect;
     final DbStructure dbStructure = new DbStructure(dialect);
     writer = new VerticaJdbcDbWriter(config, dialect, dbStructure);

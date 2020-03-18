@@ -16,6 +16,15 @@
 
 package io.confluent.connect.jdbc.dialect;
 
+import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.SubprotocolBasedProvider;
+import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
+import io.confluent.connect.jdbc.source.ColumnMapping;
+import io.confluent.connect.jdbc.util.ColumnDefinition;
+import io.confluent.connect.jdbc.util.ColumnId;
+import io.confluent.connect.jdbc.util.ExpressionBuilder;
+import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
+import io.confluent.connect.jdbc.util.IdentifierRules;
+import io.confluent.connect.jdbc.util.TableId;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
@@ -30,17 +39,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
-
-import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.SubprotocolBasedProvider;
-import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
-import io.confluent.connect.jdbc.source.ColumnMapping;
-import io.confluent.connect.jdbc.util.ColumnDefinition;
-import io.confluent.connect.jdbc.util.ColumnId;
-import io.confluent.connect.jdbc.util.ExpressionBuilder;
-import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
-import io.confluent.connect.jdbc.util.IdentifierRules;
-import io.confluent.connect.jdbc.util.TableId;
 
 /**
  * A {@link DatabaseDialect} for PostgreSQL.
@@ -242,15 +242,41 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
     builder.appendMultiple(",", "?", keyColumns.size() + nonKeyColumns.size());
     builder.append(") ON CONFLICT (");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(ExpressionBuilder.columnNames())
-           .of(keyColumns);
+            .delimitedBy(",")
+            .transformedBy(ExpressionBuilder.columnNames())
+            .of(keyColumns);
     builder.append(") DO UPDATE SET ");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(transform)
-           .of(nonKeyColumns);
+            .delimitedBy(",")
+            .transformedBy(transform)
+            .of(nonKeyColumns);
     return builder.toString();
   }
 
+  @Override
+  protected void setArrayStatement(PreparedStatement statement, Object value, Schema schema, int index, Connection connection) throws SQLException {
+    Object[] objects = ((List<?>) value).toArray();
+    switch (schema.valueSchema().type()) {
+      case INT16:
+        statement.setArray(index, connection.createArrayOf("smallint", objects));
+        break;
+      case INT32:
+        statement.setArray(index, connection.createArrayOf("integer", objects));
+        break;
+      case INT64:
+        statement.setArray(index, connection.createArrayOf("long", objects));
+        break;
+      case STRING:
+        statement.setArray(index, connection.createArrayOf("text", objects));
+        break;
+      case FLOAT32:
+        statement.setArray(index, connection.createArrayOf("flaot", objects));
+        break;
+      case FLOAT64:
+        statement.setArray(index, connection.createArrayOf("double", objects));
+        break;
+      default:
+        throw new IllegalArgumentException("Type of array elements is not within supported types");
+    }
+  }
 }

@@ -132,6 +132,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   private final AtomicReference<IdentifierRules> identifierRules = new AtomicReference<>();
   private final Queue<Connection> connections = new ConcurrentLinkedQueue<>();
   private volatile JdbcDriverInfo jdbcDriverInfo;
+  private Connection connection;
 
   /**
    * Create a new dialect instance with the given connector configuration.
@@ -177,8 +178,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     return getClass().getSimpleName().replace("DatabaseDialect", "");
   }
 
-  @Override
-  public Connection getConnection() throws SQLException {
+  private Connection createConnection() throws SQLException {
     // These config names are the same for both source and sink configs ...
     String username = config.getString(JdbcSourceConnectorConfig.CONNECTION_USER_CONFIG);
     Password dbPassword = config.getPassword(JdbcSourceConnectorConfig.CONNECTION_PASSWORD_CONFIG);
@@ -190,12 +190,18 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       properties.setProperty("password", dbPassword.value());
     }
     properties = addConnectionProperties(properties);
-    Connection connection = DriverManager.getConnection(jdbcUrl, properties);
+    Connection newConnection = DriverManager.getConnection(jdbcUrl, properties);
     if (jdbcDriverInfo == null) {
-      jdbcDriverInfo = createJdbcDriverInfo(connection);
+      jdbcDriverInfo = createJdbcDriverInfo(newConnection);
     }
-    connections.add(connection);
-    return connection;
+    return newConnection;
+  }
+
+  @Override
+  public Connection getConnection() throws SQLException {
+    Connection newConnection = createConnection();
+    connections.add(newConnection);
+    return newConnection;
   }
 
   @Override
@@ -241,6 +247,10 @@ public class GenericDatabaseDialect implements DatabaseDialect {
    */
   protected String checkConnectionQuery() {
     return "SELECT 1";
+  }
+
+  protected void setArrayStatement(PreparedStatement statement, Object value, Schema schema, int index, Connection connection) throws SQLException {
+    throw new UnsupportedOperationException("Arrays not supported");
   }
 
   protected JdbcDriverInfo jdbcDriverInfo() {
@@ -1503,6 +1513,12 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       case STRING:
         statement.setString(index, (String) value);
         break;
+      case ARRAY:
+        if (connection == null || connection.isClosed()) {
+          connection = createConnection();
+        }
+        setArrayStatement(statement, value, schema, index, connection);
+        break;
       case BYTES:
         final byte[] bytes;
         if (value instanceof ByteBuffer) {
@@ -1711,6 +1727,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       case INT64:
       case FLOAT32:
       case FLOAT64:
+      case ARRAY:
         // no escaping required
         builder.append(value);
         break;

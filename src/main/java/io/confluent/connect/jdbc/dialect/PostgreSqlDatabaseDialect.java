@@ -254,7 +254,11 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
   }
 
   @Override
-  protected void setArrayStatement(PreparedStatement statement, Object value, Schema schema, int index, Connection connection) throws SQLException {
+  protected void setArrayStatement(PreparedStatement statement,
+                                   Object value,
+                                   Schema schema,
+                                   int index,
+                                   Connection connection) throws SQLException {
     Object[] objects = ((List<?>) value).toArray();
     switch (schema.valueSchema().type()) {
       case INT16:

@@ -152,9 +152,11 @@ public class VerticaBulkOpsBufferedRecords {
 
         //3. Bulk insert
         int totalInsertCount = 0;
-        for (int updateCount : schemaState.bulkInsertStatement.executeBatch()) {
-            if (updateCount != Statement.SUCCESS_NO_INFO) {
-                totalInsertCount += updateCount;
+        if (!insertOps.isEmpty()) {
+            for (int updateCount : schemaState.bulkInsertStatement.executeBatch()) {
+                if (updateCount != Statement.SUCCESS_NO_INFO) {
+                    totalInsertCount += updateCount;
+                }
             }
         }
         log.debug("INSERTED INTO DESTINATION: {}", totalInsertCount);
@@ -279,14 +281,17 @@ public class VerticaBulkOpsBufferedRecords {
 
     class RecordSchemaDerivedState {
         private final PreparedStatement bulkDeleteStatement;
-        private final PreparedStatement bulkInsertStatement;
+        private PreparedStatement bulkInsertStatement;
         private final PreparedStatement truncateStatement;
-        private final DatabaseDialect.StatementBinder bulkInsertBinder;
-        private final PreparedStatement bulkTmpInsertStatement;
-        private final DatabaseDialect.StatementBinder bulkTmpInsertBinder;
+        private DatabaseDialect.StatementBinder bulkInsertBinder;
+        private PreparedStatement bulkTmpInsertStatement;
+        private DatabaseDialect.StatementBinder bulkTmpInsertBinder;
 
         RecordSchemaDerivedState(Schema keySchema, Schema valueSchema) throws SQLException {
             FieldsMetadata fieldsMetadata = checkDatabaseSchema(keySchema, valueSchema);
+
+            log.debug(fieldsMetadata.keyFieldNames.toString());
+            log.debug(fieldsMetadata.nonKeyFieldNames.toString());
 
             final String insertSql = getInsertSql(fieldsMetadata);
 
@@ -318,14 +323,17 @@ public class VerticaBulkOpsBufferedRecords {
                     ? connection.prepareStatement(truncateSql) : null;
 
 
-            bulkInsertStatement = connection.prepareStatement(insertSql);
-            bulkInsertBinder = dbDialect.statementBinder(
-                    bulkInsertStatement,
-                    config.pkMode,
-                    schemaPair,
-                    fieldsMetadata,
-                    config.insertMode
-            );
+            if (valueSchema != null) {
+
+                bulkInsertStatement = connection.prepareStatement(insertSql);
+                bulkInsertBinder = dbDialect.statementBinder(
+                        bulkInsertStatement,
+                        config.pkMode,
+                        schemaPair,
+                        fieldsMetadata,
+                        config.insertMode
+                );
+            }
 
             bulkTmpInsertStatement = connection.prepareStatement(getTempInsertSql(fieldsMetadata));
             bulkTmpInsertBinder = dbDialect.statementBinder(

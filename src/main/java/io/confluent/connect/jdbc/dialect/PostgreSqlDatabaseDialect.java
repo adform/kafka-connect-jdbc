@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package io.confluent.connect.jdbc.dialect;
 
 import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.SubprotocolBasedProvider;
@@ -41,12 +40,10 @@ import java.sql.Types;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-
 /**
  * A {@link DatabaseDialect} for PostgreSQL.
  */
 public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
-
   /**
    * The provider for {@link PostgreSqlDatabaseDialect}.
    */
@@ -63,6 +60,8 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
 
   private static final String JSON_TYPE_NAME = "json";
   private static final String JSONB_TYPE_NAME = "jsonb";
+  private static final String POSTGRES_UUID_TYPE_NAME = "PostgresUUID";
+  private static final String POSTGRES_OPTIONAL_UUID_TYPE_NAME = "PostgresOptionalUUID";
 
   /**
    * Create a new dialect instance with the given connector configuration.
@@ -90,12 +89,10 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
     log.trace("Initializing PreparedStatement fetch direction to FETCH_FORWARD for '{}'", stmt);
     stmt.setFetchDirection(ResultSet.FETCH_FORWARD);
   }
-
-
   @Override
   public String addFieldToSchema(
-      ColumnDefinition columnDefn,
-      SchemaBuilder builder
+          ColumnDefinition columnDefn,
+          SchemaBuilder builder
   ) {
     // Add the PostgreSQL-specific types first
     final String fieldName = fieldNameFor(columnDefn);
@@ -123,8 +120,8 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
         // since only fixed byte arrays can have a fixed size
         if (isJsonType(columnDefn)) {
           builder.field(
-              fieldName,
-              columnDefn.isOptional() ? Schema.OPTIONAL_STRING_SCHEMA : Schema.STRING_SCHEMA
+                  fieldName,
+                  columnDefn.isOptional() ? Schema.OPTIONAL_STRING_SCHEMA : Schema.STRING_SCHEMA
           );
           return fieldName;
         }
@@ -133,14 +130,12 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       default:
         break;
     }
-
     // Delegate for the remaining logic
     return super.addFieldToSchema(columnDefn, builder);
   }
-
   @Override
   public ColumnConverter createColumnConverter(
-      ColumnMapping mapping
+          ColumnMapping mapping
   ) {
     // First handle any PostgreSQL-specific types
     ColumnDefinition columnDefn = mapping.columnDefn();
@@ -168,16 +163,13 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       default:
         break;
     }
-
     // Delegate for the remaining logic
     return super.createColumnConverter(mapping);
   }
-
   protected boolean isJsonType(ColumnDefinition columnDefn) {
     String typeName = columnDefn.typeName();
     return JSON_TYPE_NAME.equalsIgnoreCase(typeName) || JSONB_TYPE_NAME.equalsIgnoreCase(typeName);
   }
-
   @Override
   protected String getSqlType(SinkRecordField field) {
     if (field.schemaName() != null) {
@@ -219,6 +211,26 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
   }
 
   @Override
+  protected boolean maybeBindLogical(
+          PreparedStatement statement,
+          int index,
+          Schema schema,
+          Object value
+  ) throws SQLException {
+    if (schema.name() != null) {
+      switch (schema.name()) {
+        case POSTGRES_UUID_TYPE_NAME:
+        case POSTGRES_OPTIONAL_UUID_TYPE_NAME:
+          statement.setObject(index, value, Types.OTHER);
+          return true;
+        default:
+          return super.maybeBindLogical(statement, index, schema, value);
+      }
+    }
+    return false;
+  }
+
+  @Override
   public String buildUpsertQueryStatement(
           TableId table,
           Collection<ColumnId> keyColumns,
@@ -226,18 +238,17 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
           Map<String, SinkRecordField> allFields) {
     final Transform<ColumnId> transform = (builder, col) -> {
       builder.appendIdentifierQuoted(col.name())
-             .append("=EXCLUDED.")
-             .appendIdentifierQuoted(col.name());
+              .append("=EXCLUDED.")
+              .appendIdentifierQuoted(col.name());
     };
-
     ExpressionBuilder builder = expressionBuilder();
     builder.append("INSERT INTO ");
     builder.append(table);
     builder.append(" (");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(ExpressionBuilder.columnNames())
-           .of(keyColumns, nonKeyColumns);
+            .delimitedBy(",")
+            .transformedBy(ExpressionBuilder.columnNames())
+            .of(keyColumns, nonKeyColumns);
     builder.append(") VALUES (");
     builder.appendMultiple(",", "?", keyColumns.size() + nonKeyColumns.size());
     builder.append(") ON CONFLICT (");
@@ -252,7 +263,6 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
             .of(nonKeyColumns);
     return builder.toString();
   }
-
   @Override
   protected void setArrayStatement(PreparedStatement statement,
                                    Object value,
@@ -274,7 +284,7 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
         statement.setArray(index, connection.createArrayOf("text", objects));
         break;
       case FLOAT32:
-        statement.setArray(index, connection.createArrayOf("flaot", objects));
+        statement.setArray(index, connection.createArrayOf("float", objects));
         break;
       case FLOAT64:
         statement.setArray(index, connection.createArrayOf("double", objects));

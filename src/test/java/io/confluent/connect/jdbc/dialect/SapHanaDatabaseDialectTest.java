@@ -22,6 +22,7 @@ import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.Test;
 
+import java.util.Collections;
 import java.util.List;
 
 import io.confluent.connect.jdbc.util.TableId;
@@ -120,10 +121,17 @@ public class SapHanaDatabaseDialectTest extends BaseDialectTest<SapHanaDatabaseD
   public void shouldBuildUpsertStatement() {
     String expected = "UPSERT \"myTable\"(\"id1\",\"id2\",\"columnA\",\"columnB\",\"columnC\"," +
                       "\"columnD\") VALUES(?,?,?,?,?,?) WITH PRIMARY KEY";
-    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);
+    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD, Collections.emptyMap());
     assertEquals(expected, sql);
   }
 
+  @Test
+  public void shouldBuildDeleteStatement() {
+    String expected = "DELETE FROM \"myTable\" WHERE \"id1\" = ? AND \"id2\" = ?";
+    String sql = dialect.buildDeleteStatement(tableId, pkColumns);
+
+    assertEquals(expected, sql);
+  }
 
   @Test
   public void createOneColNoPk() {
@@ -165,7 +173,7 @@ public class SapHanaDatabaseDialectTest extends BaseDialectTest<SapHanaDatabaseD
     assertEquals(
         "UPSERT \"tableA\"(\"col1\",\"col2\",\"col3\",\"col4\") VALUES(?,?,?,?) WITH PRIMARY KEY",
         dialect.buildUpsertQueryStatement(tableA, columns(tableA, "col1"),
-                                          columns(tableA, "col2", "col3", "col4")));
+                                          columns(tableA, "col2", "col3", "col4"), Collections.emptyMap()));
   }
 
 }

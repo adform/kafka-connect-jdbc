@@ -14,6 +14,8 @@
 
 package io.confluent.connect.jdbc.dialect;
 
+import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
+import io.confluent.connect.jdbc.util.TableId;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
 import org.apache.kafka.connect.data.Schema;
@@ -22,6 +24,8 @@ import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.Test;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
@@ -114,9 +118,37 @@ public class VerticaDatabaseDialectTest extends BaseDialectTest<VerticaDatabaseD
     assertStatements(sql, statements);
   }
 
-  @Test(expected = UnsupportedOperationException.class)
+  @Test
+  public void shouldBuildDeleteStatement() {
+    String expected = "DELETE FROM \"myTable\" WHERE \"id1\" = ? AND \"id2\" = ?";
+    String sql = dialect.buildDeleteStatement(tableId, pkColumns);
+
+    assertEquals(expected, sql);
+  }
+
+  @Test
   public void shouldBuildUpsertStatement() {
-    dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);
+    TableId book = tableId("Book");
+    HashMap<String, SinkRecordField> fields = new HashMap<>();
+    fields.put("author", new SinkRecordField(Schema.STRING_SCHEMA, "author", true));
+    fields.put("title", new SinkRecordField(Schema.STRING_SCHEMA, "title", true));
+    fields.put("ISBN", new SinkRecordField(Schema.STRING_SCHEMA, "ISBN", false));
+    fields.put("year", new SinkRecordField(Schema.INT32_SCHEMA, "year", false));
+    fields.put("pages", new SinkRecordField(Schema.INT32_SCHEMA, "pages", false));
+    assertEquals(
+            "MERGE INTO \"Book\" AS target USING ("
+                    + "SELECT ?::VARCHAR AS \"author\", ?::VARCHAR AS \"title\", ?::VARCHAR AS \"ISBN\", ?::INT AS \"year\", ?::INT AS \"pages\""
+                    + ") AS incoming ON (target.\"author\"=incoming.\"author\" AND target.\"title\"=incoming.\"title\")"
+                    + " WHEN MATCHED THEN UPDATE SET \"ISBN\"=incoming.\"ISBN\",\"year\"=incoming.\"year\",\"pages\"=incoming.\"pages\","
+                    + "\"author\"=incoming.\"author\",\"title\"=incoming.\"title\""
+                    + " WHEN NOT MATCHED THEN INSERT (\"ISBN\", \"year\", \"pages\", \"author\", \"title\") VALUES ("
+                    + "incoming.\"ISBN\",incoming.\"year\",incoming.\"pages\",incoming.\"author\",incoming.\"title\");",
+            dialect.buildUpsertQueryStatement(
+                    book,
+                    columns(book, "author", "title"),
+                    columns(book, "ISBN", "year", "pages"),
+                    fields)
+    );
   }
 
 

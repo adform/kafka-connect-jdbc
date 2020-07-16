@@ -140,6 +140,11 @@ public class TimestampIncrementingTableQuerier extends TableQuerier implements C
       incrementingColumn = new ColumnId(tableId, incrementingColumnName);
     }
 
+    doCreatePreparedStatement(db, incrementingColumn);
+  }
+
+  private void doCreatePreparedStatement(Connection db, ColumnId incrementingColumn)
+          throws SQLException {
     ExpressionBuilder builder = dialect.expressionBuilder();
     switch (mode) {
       case TABLE:

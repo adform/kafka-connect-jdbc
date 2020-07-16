@@ -13,9 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package io.confluent.connect.jdbc.dialect;
 
+import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.SubprotocolBasedProvider;
+import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
+import io.confluent.connect.jdbc.source.ColumnMapping;
+import io.confluent.connect.jdbc.util.ColumnDefinition;
+import io.confluent.connect.jdbc.util.ColumnId;
+import io.confluent.connect.jdbc.util.ExpressionBuilder;
+import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
+import io.confluent.connect.jdbc.util.IdentifierRules;
+import io.confluent.connect.jdbc.util.TableId;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.connect.data.Date;
 import org.apache.kafka.connect.data.Decimal;
@@ -30,22 +38,12 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.Collection;
-
-import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.SubprotocolBasedProvider;
-import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
-import io.confluent.connect.jdbc.source.ColumnMapping;
-import io.confluent.connect.jdbc.util.ColumnDefinition;
-import io.confluent.connect.jdbc.util.ColumnId;
-import io.confluent.connect.jdbc.util.ExpressionBuilder;
-import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
-import io.confluent.connect.jdbc.util.IdentifierRules;
-import io.confluent.connect.jdbc.util.TableId;
-
+import java.util.List;
+import java.util.Map;
 /**
  * A {@link DatabaseDialect} for PostgreSQL.
  */
 public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
-
   /**
    * The provider for {@link PostgreSqlDatabaseDialect}.
    */
@@ -62,6 +60,10 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
 
   private static final String JSON_TYPE_NAME = "json";
   private static final String JSONB_TYPE_NAME = "jsonb";
+  private static final String POSTGRES_UUID_TYPE_NAME = "PostgresUUID";
+  private static final String POSTGRES_OPTIONAL_UUID_TYPE_NAME = "PostgresOptionalUUID";
+  private static final String POSTGRES_JSONB_TYPE_NAME = "PostgresJsonb";
+  private static final String POSTGRES_OPTIONAL_JSONB_TYPE_NAME = "PostgresOptionalJsonb";
 
   /**
    * Create a new dialect instance with the given connector configuration.
@@ -89,12 +91,10 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
     log.trace("Initializing PreparedStatement fetch direction to FETCH_FORWARD for '{}'", stmt);
     stmt.setFetchDirection(ResultSet.FETCH_FORWARD);
   }
-
-
   @Override
   public String addFieldToSchema(
-      ColumnDefinition columnDefn,
-      SchemaBuilder builder
+          ColumnDefinition columnDefn,
+          SchemaBuilder builder
   ) {
     // Add the PostgreSQL-specific types first
     final String fieldName = fieldNameFor(columnDefn);
@@ -122,8 +122,8 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
         // since only fixed byte arrays can have a fixed size
         if (isJsonType(columnDefn)) {
           builder.field(
-              fieldName,
-              columnDefn.isOptional() ? Schema.OPTIONAL_STRING_SCHEMA : Schema.STRING_SCHEMA
+                  fieldName,
+                  columnDefn.isOptional() ? Schema.OPTIONAL_STRING_SCHEMA : Schema.STRING_SCHEMA
           );
           return fieldName;
         }
@@ -132,14 +132,12 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       default:
         break;
     }
-
     // Delegate for the remaining logic
     return super.addFieldToSchema(columnDefn, builder);
   }
-
   @Override
   public ColumnConverter createColumnConverter(
-      ColumnMapping mapping
+          ColumnMapping mapping
   ) {
     // First handle any PostgreSQL-specific types
     ColumnDefinition columnDefn = mapping.columnDefn();
@@ -167,16 +165,13 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       default:
         break;
     }
-
     // Delegate for the remaining logic
     return super.createColumnConverter(mapping);
   }
-
   protected boolean isJsonType(ColumnDefinition columnDefn) {
     String typeName = columnDefn.typeName();
     return JSON_TYPE_NAME.equalsIgnoreCase(typeName) || JSONB_TYPE_NAME.equalsIgnoreCase(typeName);
   }
-
   @Override
   protected String getSqlType(SinkRecordField field) {
     if (field.schemaName() != null) {
@@ -218,38 +213,88 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
   }
 
   @Override
+  protected boolean maybeBindLogical(
+          PreparedStatement statement,
+          int index,
+          Schema schema,
+          Object value
+  ) throws SQLException {
+    if (schema.name() != null) {
+      switch (schema.name()) {
+        case POSTGRES_UUID_TYPE_NAME:
+        case POSTGRES_OPTIONAL_UUID_TYPE_NAME:
+        case POSTGRES_JSONB_TYPE_NAME:
+        case POSTGRES_OPTIONAL_JSONB_TYPE_NAME:
+          statement.setObject(index, value, Types.OTHER);
+          return true;
+        default:
+          return super.maybeBindLogical(statement, index, schema, value);
+      }
+    }
+    return false;
+  }
+
+  @Override
   public String buildUpsertQueryStatement(
-      TableId table,
-      Collection<ColumnId> keyColumns,
-      Collection<ColumnId> nonKeyColumns
-  ) {
+          TableId table,
+          Collection<ColumnId> keyColumns,
+          Collection<ColumnId> nonKeyColumns,
+          Map<String, SinkRecordField> allFields) {
     final Transform<ColumnId> transform = (builder, col) -> {
       builder.appendIdentifierQuoted(col.name())
-             .append("=EXCLUDED.")
-             .appendIdentifierQuoted(col.name());
+              .append("=EXCLUDED.")
+              .appendIdentifierQuoted(col.name());
     };
-
     ExpressionBuilder builder = expressionBuilder();
     builder.append("INSERT INTO ");
     builder.append(table);
     builder.append(" (");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(ExpressionBuilder.columnNames())
-           .of(keyColumns, nonKeyColumns);
+            .delimitedBy(",")
+            .transformedBy(ExpressionBuilder.columnNames())
+            .of(keyColumns, nonKeyColumns);
     builder.append(") VALUES (");
     builder.appendMultiple(",", "?", keyColumns.size() + nonKeyColumns.size());
     builder.append(") ON CONFLICT (");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(ExpressionBuilder.columnNames())
-           .of(keyColumns);
+            .delimitedBy(",")
+            .transformedBy(ExpressionBuilder.columnNames())
+            .of(keyColumns);
     builder.append(") DO UPDATE SET ");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(transform)
-           .of(nonKeyColumns);
+            .delimitedBy(",")
+            .transformedBy(transform)
+            .of(nonKeyColumns);
     return builder.toString();
   }
-
+  @Override
+  protected void setArrayStatement(PreparedStatement statement,
+                                   Object value,
+                                   Schema schema,
+                                   int index,
+                                   Connection connection) throws SQLException {
+    Object[] objects = ((List<?>) value).toArray();
+    switch (schema.valueSchema().type()) {
+      case INT16:
+        statement.setArray(index, connection.createArrayOf("smallint", objects));
+        break;
+      case INT32:
+        statement.setArray(index, connection.createArrayOf("integer", objects));
+        break;
+      case INT64:
+        statement.setArray(index, connection.createArrayOf("long", objects));
+        break;
+      case STRING:
+        statement.setArray(index, connection.createArrayOf("text", objects));
+        break;
+      case FLOAT32:
+        statement.setArray(index, connection.createArrayOf("float", objects));
+        break;
+      case FLOAT64:
+        statement.setArray(index, connection.createArrayOf("double", objects));
+        break;
+      default:
+        throw new IllegalArgumentException("Type of array elements is not within supported types");
+    }
+  }
 }

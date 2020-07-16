@@ -22,6 +22,7 @@ import org.apache.kafka.connect.data.Time;
 import org.apache.kafka.connect.data.Timestamp;
 import org.junit.Test;
 
+import java.util.Collections;
 import java.util.List;
 
 import io.confluent.connect.jdbc.util.TableId;
@@ -126,7 +127,15 @@ public class OracleDatabaseDialectTest extends BaseDialectTest<OracleDatabaseDia
                       "\"myTable\".\"id1\",\"myTable\".\"id2\") values(incoming.\"columnA\"," +
                       "incoming.\"columnB\",incoming.\"columnC\",incoming.\"columnD\",incoming" +
                       ".\"id1\",incoming.\"id2\")";
-    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD);
+    String sql = dialect.buildUpsertQueryStatement(tableId, pkColumns, columnsAtoD, Collections.emptyMap());
+    assertEquals(expected, sql);
+  }
+
+  @Test
+  public void shouldBuildDeleteStatement() {
+    String expected = "DELETE FROM \"myTable\" WHERE \"id1\" = ? AND \"id2\" = ?";
+    String sql = dialect.buildDeleteStatement(tableId, pkColumns);
+
     assertEquals(expected, sql);
   }
 
@@ -178,7 +187,7 @@ public class OracleDatabaseDialectTest extends BaseDialectTest<OracleDatabaseDia
                       "\"ARTICLE\".\"author\") " +
                       "values(incoming.\"body\",incoming.\"title\",incoming.\"author\")";
     String actual = dialect.buildUpsertQueryStatement(article, columns(article, "title", "author"),
-                                                      columns(article, "body"));
+                                                      columns(article, "body"), Collections.emptyMap());
     assertEquals(expected, actual);
   }
 

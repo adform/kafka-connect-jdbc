@@ -380,4 +380,14 @@ public class GenericDatabaseDialectTest extends BaseDialectTest<GenericDatabaseD
     verifyWriteColumnSpec("\"foo\" DUMMY NOT NULL", new SinkRecordField(Schema.OPTIONAL_INT32_SCHEMA, "foo", true));
     verifyWriteColumnSpec("\"foo\" DUMMY NULL", new SinkRecordField(Schema.OPTIONAL_INT32_SCHEMA, "foo", false));
   }
+
+
+  @Test
+  public void testBulkDelete() {
+    TableId destTable = new TableId("x", "y", "z");
+    TableId tmpTable = new TableId("a", "b", "c");
+    String result = dialect.buildBulkDeleteStatement(destTable, tmpTable, Arrays.asList(new ColumnId(destTable, "id1"),new ColumnId(destTable, "id2")));
+    String expected = "DELETE FROM \"x\".\"y\".\"z\" WHERE EXISTS (SELECT 1 FROM \"a\".\"b\".\"c\" tmp WHERE \"x\".\"y\".\"z\".id1=tmp.id1 AND \"x\".\"y\".\"z\".id2=tmp.id2)";
+    assertEquals(expected, result);
+  }
 }

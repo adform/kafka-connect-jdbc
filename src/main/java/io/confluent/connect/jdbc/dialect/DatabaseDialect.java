@@ -1,17 +1,16 @@
 /*
  * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 
 package io.confluent.connect.jdbc.dialect;
@@ -343,20 +342,6 @@ public interface DatabaseDialect extends ConnectionProvider {
   );
 
   /**
-   * Build the DELETE prepared statement expression for the given table and its columns. Variables
-   * for each key column should also appear in the WHERE clause of the statement.
-   *
-   * @param table         the identifier of the table; may not be null
-   * @param keyColumns    the identifiers of the columns in the primary/unique key; may not be null
-   *                      but may be empty
-   * @return the DELETE statement; may not be null
-   */
-  String buildDeleteStatement(
-          TableId table,
-          Collection<ColumnId> keyColumns
-  );
-
-  /**
    * Build the UPSERT or MERGE prepared statement expression to either insert a new record into the
    * given table or update an existing record in that table Variables for each key column should
    * also appear in the WHERE clause of the statement.
@@ -366,15 +351,32 @@ public interface DatabaseDialect extends ConnectionProvider {
    *                      but may be empty
    * @param nonKeyColumns the identifiers of the other columns in the table; may not be null but may
    *                      be empty
-   * @param allFields     all table fields; used to get type information for upserts
    * @return the upsert/merge statement; may not be null
    * @throws UnsupportedOperationException if the dialect does not support upserts
    */
   String buildUpsertQueryStatement(
-          TableId table,
-          Collection<ColumnId> keyColumns,
-          Collection<ColumnId> nonKeyColumns,
-          Map<String, SinkRecordField> allFields);
+      TableId table,
+      Collection<ColumnId> keyColumns,
+      Collection<ColumnId> nonKeyColumns,
+      Map<String, SinkRecordField> allFields
+  );
+
+  /**
+   * Build the DELETE prepared statement expression for the given table and its columns. Variables
+   * for each key column should also appear in the WHERE clause of the statement.
+   *
+   * @param table      the identifier of the table; may not be null
+   * @param keyColumns the identifiers of the columns in the primary/unique key; may not be null
+   *                   but may be empty
+   * @return the delete statement; may not be null
+   * @throws UnsupportedOperationException if the dialect does not support deletes
+   */
+  default String buildDeleteStatement(
+      TableId table,
+      Collection<ColumnId> keyColumns
+  ) {
+    throw new UnsupportedOperationException();
+  }
 
   /**
    * Build the DROP TABLE statement expression for the given table.
@@ -416,12 +418,10 @@ public interface DatabaseDialect extends ConnectionProvider {
    */
   StatementBinder statementBinder(
       PreparedStatement statement,
-      PreparedStatement deleteStatement,
       JdbcSinkConfig.PrimaryKeyMode pkMode,
       SchemaPair schemaPair,
       FieldsMetadata fieldsMetadata,
-      JdbcSinkConfig.InsertMode insertMode,
-      JdbcSinkConfig config
+      JdbcSinkConfig.InsertMode insertMode
   );
 
   /**

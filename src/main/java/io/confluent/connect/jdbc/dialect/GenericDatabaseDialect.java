@@ -16,6 +16,30 @@
 
 package io.confluent.connect.jdbc.dialect;
 
+import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.FixedScoreProvider;
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig;
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig.InsertMode;
+import io.confluent.connect.jdbc.sink.JdbcSinkConfig.PrimaryKeyMode;
+import io.confluent.connect.jdbc.sink.PreparedStatementBinder;
+import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
+import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
+import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
+import io.confluent.connect.jdbc.source.ColumnMapping;
+import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig;
+import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig.NumericMapping;
+import io.confluent.connect.jdbc.source.JdbcSourceTaskConfig;
+import io.confluent.connect.jdbc.source.TimestampIncrementingCriteria;
+import io.confluent.connect.jdbc.util.ColumnDefinition;
+import io.confluent.connect.jdbc.util.ColumnDefinition.Mutability;
+import io.confluent.connect.jdbc.util.ColumnDefinition.Nullability;
+import io.confluent.connect.jdbc.util.ColumnId;
+import io.confluent.connect.jdbc.util.DateTimeUtils;
+import io.confluent.connect.jdbc.util.ExpressionBuilder;
+import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
+import io.confluent.connect.jdbc.util.IdentifierRules;
+import io.confluent.connect.jdbc.util.JdbcDriverInfo;
+import io.confluent.connect.jdbc.util.TableDefinition;
+import io.confluent.connect.jdbc.util.TableId;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.types.Password;
 import org.apache.kafka.connect.data.Date;
@@ -59,33 +83,9 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Queue;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
-
-import io.confluent.connect.jdbc.dialect.DatabaseDialectProvider.FixedScoreProvider;
-import io.confluent.connect.jdbc.sink.JdbcSinkConfig;
-import io.confluent.connect.jdbc.sink.JdbcSinkConfig.InsertMode;
-import io.confluent.connect.jdbc.sink.JdbcSinkConfig.PrimaryKeyMode;
-import io.confluent.connect.jdbc.sink.PreparedStatementBinder;
-import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
-import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
-import io.confluent.connect.jdbc.sink.metadata.SinkRecordField;
-import io.confluent.connect.jdbc.source.ColumnMapping;
-import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig;
-import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig.NumericMapping;
-import io.confluent.connect.jdbc.source.JdbcSourceTaskConfig;
-import io.confluent.connect.jdbc.source.TimestampIncrementingCriteria;
-import io.confluent.connect.jdbc.util.ColumnDefinition;
-import io.confluent.connect.jdbc.util.ColumnDefinition.Mutability;
-import io.confluent.connect.jdbc.util.ColumnDefinition.Nullability;
-import io.confluent.connect.jdbc.util.ColumnId;
-import io.confluent.connect.jdbc.util.DateTimeUtils;
-import io.confluent.connect.jdbc.util.ExpressionBuilder;
-import io.confluent.connect.jdbc.util.ExpressionBuilder.Transform;
-import io.confluent.connect.jdbc.util.IdentifierRules;
-import io.confluent.connect.jdbc.util.JdbcDriverInfo;
-import io.confluent.connect.jdbc.util.TableDefinition;
-import io.confluent.connect.jdbc.util.TableId;
 
 /**
  * A {@link DatabaseDialect} implementation that provides functionality based upon JDBC and SQL.
@@ -107,7 +107,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   public static class Provider extends FixedScoreProvider {
     public Provider() {
       super(GenericDatabaseDialect.class.getSimpleName(),
-            DatabaseDialectProvider.AVERAGE_MATCHING_SCORE
+          DatabaseDialectProvider.AVERAGE_MATCHING_SCORE
       );
     }
 
@@ -132,6 +132,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   private final AtomicReference<IdentifierRules> identifierRules = new AtomicReference<>();
   private final Queue<Connection> connections = new ConcurrentLinkedQueue<>();
   private volatile JdbcDriverInfo jdbcDriverInfo;
+  private Connection connection;
 
   /**
    * Create a new dialect instance with the given connector configuration.
@@ -166,7 +167,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       tableTypes = new HashSet<>(config.getList(JdbcSourceTaskConfig.TABLE_TYPE_CONFIG));
     }
     if (config instanceof JdbcSourceConnectorConfig) {
-      mapNumerics = ((JdbcSourceConnectorConfig)config).numericMapping();
+      mapNumerics = ((JdbcSourceConnectorConfig) config).numericMapping();
     } else {
       mapNumerics = NumericMapping.NONE;
     }
@@ -177,8 +178,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     return getClass().getSimpleName().replace("DatabaseDialect", "");
   }
 
-  @Override
-  public Connection getConnection() throws SQLException {
+  private Connection createConnection() throws SQLException {
     // These config names are the same for both source and sink configs ...
     String username = config.getString(JdbcSourceConnectorConfig.CONNECTION_USER_CONFIG);
     Password dbPassword = config.getPassword(JdbcSourceConnectorConfig.CONNECTION_PASSWORD_CONFIG);
@@ -190,12 +190,18 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       properties.setProperty("password", dbPassword.value());
     }
     properties = addConnectionProperties(properties);
-    Connection connection = DriverManager.getConnection(jdbcUrl, properties);
+    Connection newConnection = DriverManager.getConnection(jdbcUrl, properties);
     if (jdbcDriverInfo == null) {
-      jdbcDriverInfo = createJdbcDriverInfo(connection);
+      jdbcDriverInfo = createJdbcDriverInfo(newConnection);
     }
-    connections.add(connection);
-    return connection;
+    return newConnection;
+  }
+
+  @Override
+  public Connection getConnection() throws SQLException {
+    Connection newConnection = createConnection();
+    connections.add(newConnection);
+    return newConnection;
   }
 
   @Override
@@ -241,6 +247,10 @@ public class GenericDatabaseDialect implements DatabaseDialect {
    */
   protected String checkConnectionQuery() {
     return "SELECT 1";
+  }
+
+  protected void setArrayStatement(PreparedStatement statement, Object value, Schema schema, int index, Connection connection) throws SQLException {
+    throw new UnsupportedOperationException("Arrays not supported");
   }
 
   protected JdbcDriverInfo jdbcDriverInfo() {
@@ -512,7 +522,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     TableId tableId = parseTableIdentifier(tablePattern);
     String catalog = tableId.catalogName() != null ? tableId.catalogName() : catalogPattern;
     String schema = tableId.schemaName() != null ? tableId.schemaName() : schemaPattern;
-    return describeColumns(connection, catalog , schema, tableId.tableName(), columnPattern);
+    return describeColumns(connection, catalog, schema, tableId.tableName(), columnPattern);
   }
 
   @Override
@@ -732,8 +742,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       TableId tableId
   ) throws SQLException {
     Map<ColumnId, ColumnDefinition> columnDefns = describeColumns(connection, tableId.catalogName(),
-                                                                  tableId.schemaName(),
-                                                                  tableId.tableName(), null
+        tableId.schemaName(),
+        tableId.tableName(), null
     );
     if (columnDefns.isEmpty()) {
       return null;
@@ -832,7 +842,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       SchemaBuilder builder
   ) {
     return addFieldToSchema(columnDefn, builder, fieldNameFor(columnDefn), columnDefn.type(),
-                            columnDefn.isOptional()
+        columnDefn.isOptional()
     );
   }
 
@@ -1064,7 +1074,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       ColumnMapping mapping
   ) {
     return columnConverterFor(mapping, mapping.columnDefn(), mapping.columnNumber(),
-                              jdbcDriverInfo().jdbcVersionAtLeast(4, 0)
+        jdbcDriverInfo().jdbcVersionAtLeast(4, 0)
     );
   }
 
@@ -1339,9 +1349,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     builder.append(table);
     builder.append("(");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(ExpressionBuilder.columnNames())
-           .of(keyColumns, nonKeyColumns);
+        .delimitedBy(",")
+        .transformedBy(ExpressionBuilder.columnNames())
+        .of(keyColumns, nonKeyColumns);
     builder.append(") VALUES(");
     builder.appendMultiple(",", "?", keyColumns.size() + nonKeyColumns.size());
     builder.append(")");
@@ -1349,8 +1359,8 @@ public class GenericDatabaseDialect implements DatabaseDialect {
   }
 
   public String buildDeleteStatement(
-          TableId table,
-          Collection<ColumnId> keyColumns
+      TableId table,
+      Collection<ColumnId> keyColumns
   ) {
     ExpressionBuilder builder = expressionBuilder();
     builder.append("DELETE FROM ");
@@ -1358,14 +1368,50 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     if (!keyColumns.isEmpty()) {
       builder.append(" WHERE ");
       builder.appendList()
-              .delimitedBy(" AND ")
-              .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
-              .of(keyColumns);
+          .delimitedBy(" AND ")
+          .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
+          .of(keyColumns);
     }
     return builder.toString();
   }
 
-  @Override
+    public String buildBulkDeleteStatement(
+            TableId table,
+            TableId tmpTable,
+            Collection<ColumnId> keyColumns
+    ) {
+        StringJoiner joiner = new StringJoiner(" AND ");
+        ExpressionBuilder builder = expressionBuilder();
+        ExpressionBuilder builderName = expressionBuilder();
+        String tableName = builderName.append(table).toString();
+        builder.append("DELETE FROM ");
+        builder.append(table);
+        if (!keyColumns.isEmpty()) {
+            builder.append(" WHERE ");
+            builder.append("EXISTS (SELECT 1 FROM ");
+            builder.append(tmpTable);
+            builder.append(" tmp WHERE ");
+            keyColumns
+                    .stream()
+                    .map(columnId -> tableName + "." + columnId.name() + "=tmp." + columnId.name())
+                    .forEach(joiner::add);
+            builder.append(joiner.toString());
+            builder.append(")");
+        }
+        return builder.toString();
+    }
+
+    public String truncateTableStatement(
+            TableId table
+    ) {
+        ExpressionBuilder builder = expressionBuilder();
+        builder.append("TRUNCATE TABLE ");
+        builder.append(table);
+        return builder.toString();
+    }
+
+
+    @Override
   public String buildUpdateStatement(
       TableId table,
       Collection<ColumnId> keyColumns,
@@ -1376,47 +1422,43 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     builder.append(table);
     builder.append(" SET ");
     builder.appendList()
-           .delimitedBy(", ")
-           .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
-           .of(nonKeyColumns);
+        .delimitedBy(", ")
+        .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
+        .of(nonKeyColumns);
     if (!keyColumns.isEmpty()) {
       builder.append(" WHERE ");
       builder.appendList()
-             .delimitedBy(", ")
-             .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
-             .of(keyColumns);
+          .delimitedBy(", ")
+          .transformedBy(ExpressionBuilder.columnNamesWith(" = ?"))
+          .of(keyColumns);
     }
     return builder.toString();
   }
 
   @Override
   public String buildUpsertQueryStatement(
-          TableId table,
-          Collection<ColumnId> keyColumns,
-          Collection<ColumnId> nonKeyColumns,
-          Map<String, SinkRecordField> allFields) {
+      TableId table,
+      Collection<ColumnId> keyColumns,
+      Collection<ColumnId> nonKeyColumns,
+      Map<String, SinkRecordField> allFields) {
     throw new UnsupportedOperationException();
   }
 
   @Override
   public StatementBinder statementBinder(
       PreparedStatement statement,
-      PreparedStatement deleteStatement,
       PrimaryKeyMode pkMode,
       SchemaPair schemaPair,
       FieldsMetadata fieldsMetadata,
-      InsertMode insertMode,
-      JdbcSinkConfig config
+      InsertMode insertMode
   ) {
     return new PreparedStatementBinder(
         this,
         statement,
-        deleteStatement,
         pkMode,
         schemaPair,
         fieldsMetadata,
-        insertMode,
-        config
+        insertMode
     );
   }
 
@@ -1470,6 +1512,12 @@ public class GenericDatabaseDialect implements DatabaseDialect {
         break;
       case STRING:
         statement.setString(index, (String) value);
+        break;
+      case ARRAY:
+        if (connection == null || connection.isClosed()) {
+          connection = createConnection();
+        }
+        setArrayStatement(statement, value, schema, index, connection);
         break;
       case BYTES:
         final byte[] bytes;
@@ -1544,9 +1592,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       builder.append(System.lineSeparator());
       builder.append("PRIMARY KEY(");
       builder.appendList()
-             .delimitedBy(",")
-             .transformedBy(ExpressionBuilder.quote())
-             .of(pkFieldNames);
+          .delimitedBy(",")
+          .transformedBy(ExpressionBuilder.quote())
+          .of(pkFieldNames);
       builder.append(")");
     }
     builder.append(")");
@@ -1591,9 +1639,9 @@ public class GenericDatabaseDialect implements DatabaseDialect {
     builder.append(table);
     builder.append(" ");
     builder.appendList()
-           .delimitedBy(",")
-           .transformedBy(transform)
-           .of(fields);
+        .delimitedBy(",")
+        .transformedBy(transform)
+        .of(fields);
     return Collections.singletonList(builder.toString());
   }
 
@@ -1679,6 +1727,7 @@ public class GenericDatabaseDialect implements DatabaseDialect {
       case INT64:
       case FLOAT32:
       case FLOAT64:
+      case ARRAY:
         // no escaping required
         builder.append(value);
         break;

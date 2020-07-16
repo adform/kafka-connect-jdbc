@@ -1,17 +1,16 @@
 /*
- * Copyright 2016 Confluent Inc.
+ * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 
 package io.confluent.connect.jdbc.sink;
@@ -29,7 +28,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import io.confluent.connect.jdbc.dialect.DatabaseDialect;
@@ -38,6 +37,10 @@ import io.confluent.connect.jdbc.sink.metadata.FieldsMetadata;
 import io.confluent.connect.jdbc.sink.metadata.SchemaPair;
 import io.confluent.connect.jdbc.util.ColumnId;
 import io.confluent.connect.jdbc.util.TableId;
+
+import static io.confluent.connect.jdbc.sink.JdbcSinkConfig.InsertMode.INSERT;
+import static java.util.Objects.isNull;
+import static java.util.Objects.nonNull;
 
 public class BufferedRecords {
   private static final Logger log = LoggerFactory.getLogger(BufferedRecords.class);
@@ -49,14 +52,14 @@ public class BufferedRecords {
   private final Connection connection;
 
   private List<SinkRecord> records = new ArrayList<>();
-  private FieldsMetadata fieldsMetadata;
-  private PreparedStatement preparedStatement;
-  private StatementBinder preparedStatementBinder;
-
   private Schema keySchema;
   private Schema valueSchema;
-  private boolean batchContainsDeletes = false;
+  private FieldsMetadata fieldsMetadata;
+  private PreparedStatement updatePreparedStatement;
   private PreparedStatement deletePreparedStatement;
+  private StatementBinder updateStatementBinder;
+  private StatementBinder deleteStatementBinder;
+  private boolean deletesInBatch = false;
 
   public BufferedRecords(
       JdbcSinkConfig config,
@@ -73,56 +76,140 @@ public class BufferedRecords {
   }
 
   public List<SinkRecord> add(SinkRecord record) throws SQLException {
-    final SchemaPair schemaPair = new SchemaPair(
-        record.keySchema(),
-        record.valueSchema()
-    );
+    final List<SinkRecord> flushed = new ArrayList<>();
 
-    List<SinkRecord> flushed = new ArrayList<>();
+    final Schema recordKeySchema = record.keySchema();
+    final Schema recordValueSchema = record.valueSchema();
 
-    boolean schemaChanged = false;
+    boolean schemaChanged = (recordKeySchema != null && !recordKeySchema.equals(keySchema))
+        || (recordValueSchema != null && !recordValueSchema.equals(valueSchema));
 
-    if (!Objects.equals(keySchema, record.keySchema())) {
-      keySchema = record.keySchema();
-      schemaChanged = true;
-    }
-
-    if (schemaPair.valueSchema == null) {
-      // For deletes, both the value and value schema come in as null.
+    if (schemaChanged) {
+      // value schema is not null and has changed. This is a real schema change.
+      flushed.addAll(flush());
+      keySchema = recordKeySchema;
+      valueSchema = recordValueSchema;
+      resetSchemaState(recordKeySchema, recordValueSchema);
+    } else if (record.value() == null) {
+      // For deletes, both the value and value schema come in as null. // NOT TRUE!
       // We don't want to treat this as a schema change if key schemas is the same
       // otherwise we flush unnecessarily.
       if (config.deleteEnabled) {
-        batchContainsDeletes = true;
+        deletesInBatch = true;
       }
-    } else if (Objects.equals(valueSchema, record.valueSchema())) {
-      if (config.deleteEnabled && batchContainsDeletes) {
-        // flush so an insert after a delete of same record isn't lost
-        flushed.addAll(flush());
-      }
-    } else {
-      valueSchema = record.valueSchema();
-      schemaChanged = true;
-    }
-
-    if (schemaChanged) {
-      // Each batch needs to have the same schemas, so get the buffered records out
+    } else if (config.deleteEnabled && deletesInBatch) {
+      // flush so an insert after a delete of same record isn't lost
       flushed.addAll(flush());
-
-      onSchemaChanged(schemaPair);
     }
 
     records.add(record);
+
     if (records.size() >= config.batchSize) {
-      log.debug("Flushing buffered records after exceeding configured batch size {}.",
-          config.batchSize);
       flushed.addAll(flush());
     }
-
     return flushed;
   }
 
-  private void onSchemaChanged(SchemaPair schemaPair) throws SQLException {
+
+  public List<SinkRecord> flush() throws SQLException {
+    if (records.isEmpty()) {
+      log.debug("Records is empty");
+      return new ArrayList<>();
+    }
+    log.debug("Flushing {} buffered records", records.size());
+    for (SinkRecord record : records) {
+      if (isNull(record.value()) && nonNull(deleteStatementBinder)) {
+        deleteStatementBinder.bindRecord(record);
+      } else {
+        updateStatementBinder.bindRecord(record);
+      }
+    }
+    Optional<Long> totalUpdateCount = executeUpdates();
+    long totalDeleteCount = executeDeletes();
+
+    final long expectedCount = updateRecordCount();
+    log.trace("{} records:{} resulting in totalUpdateCount:{} totalDeleteCount:{}",
+        config.insertMode, records.size(), totalUpdateCount, totalDeleteCount
+    );
+    if (totalUpdateCount.filter(total -> total != expectedCount).isPresent()
+        && config.insertMode == INSERT) {
+      throw new ConnectException(String.format(
+          "Update count (%d) did not sum up to total number of records inserted (%d)",
+          totalUpdateCount.get(),
+          expectedCount
+      ));
+    }
+    if (!totalUpdateCount.isPresent()) {
+      log.info(
+          "{} records:{} , but no count of the number of rows it affected is available",
+          config.insertMode,
+          records.size()
+      );
+    }
+
+    final List<SinkRecord> flushedRecords = records;
+    records = new ArrayList<>();
+    deletesInBatch = false;
+    return flushedRecords;
+  }
+
+  /**
+   * @return an optional count of all updated rows or an empty optional if no info is available
+   */
+  private Optional<Long> executeUpdates() throws SQLException {
+    Optional<Long> count = Optional.empty();
+    for (int updateCount : updatePreparedStatement.executeBatch()) {
+      if (updateCount != Statement.SUCCESS_NO_INFO) {
+        count = count.isPresent()
+            ? count.map(total -> total + updateCount)
+            : Optional.of((long) updateCount);
+      }
+    }
+    return count;
+  }
+
+  private long executeDeletes() throws SQLException {
+    long totalDeleteCount = 0;
+    if (nonNull(deletePreparedStatement)) {
+      for (int updateCount : deletePreparedStatement.executeBatch()) {
+        if (updateCount != Statement.SUCCESS_NO_INFO) {
+          totalDeleteCount += updateCount;
+        }
+      }
+    }
+    return totalDeleteCount;
+  }
+
+  private long updateRecordCount() {
+    return records
+        .stream()
+        // ignore deletes
+        .filter(record -> nonNull(record.value()) || !config.deleteEnabled)
+        .count();
+  }
+
+  public void close() throws SQLException {
+    log.info(
+        "Closing BufferedRecords with updatePreparedStatement: {} deletePreparedStatement: {}",
+        updatePreparedStatement,
+        deletePreparedStatement
+    );
+    if (nonNull(updatePreparedStatement)) {
+      updatePreparedStatement.close();
+      updatePreparedStatement = null;
+    }
+    if (nonNull(deletePreparedStatement)) {
+      deletePreparedStatement.close();
+      deletePreparedStatement = null;
+    }
+  }
+
+  private void resetSchemaState(Schema keySchema, Schema valueSchema) throws SQLException {
     // re-initialize everything that depends on the record schema
+    final SchemaPair schemaPair = new SchemaPair(
+        keySchema,
+        valueSchema
+    );
     fieldsMetadata = FieldsMetadata.extract(
         tableId.tableName(),
         config.pkMode,
@@ -136,104 +223,33 @@ public class BufferedRecords {
         tableId,
         fieldsMetadata
     );
-
-    final String sql = getInsertSql();
+    final String insertSql = getInsertSql();
     final String deleteSql = getDeleteSql();
     log.debug(
-        "{} sql: {}, DELETE sql: {}",
+        "{} sql: {} deleteSql: {} meta: {}",
         config.insertMode,
-        sql,
-        deleteSql
+        insertSql,
+        deleteSql,
+        fieldsMetadata
     );
     close();
-    preparedStatement = connection.prepareStatement(sql);
-    deletePreparedStatement = config.deleteEnabled ? connection.prepareStatement(deleteSql) : null;
-    preparedStatementBinder = dbDialect.statementBinder(
-        preparedStatement,
-        deletePreparedStatement,
+    updatePreparedStatement = dbDialect.createPreparedStatement(connection, insertSql);
+    updateStatementBinder = dbDialect.statementBinder(
+        updatePreparedStatement,
         config.pkMode,
         schemaPair,
         fieldsMetadata,
-        config.insertMode,
-        config
+        config.insertMode
     );
-  }
-
-  public List<SinkRecord> flush() throws SQLException {
-    if (records.isEmpty()) {
-      return new ArrayList<>();
-    }
-    for (SinkRecord record : records) {
-      preparedStatementBinder.bindRecord(record);
-    }
-    int totalUpdateCount = 0;
-    boolean successNoInfo = false;
-    for (int updateCount : preparedStatement.executeBatch()) {
-      if (updateCount == Statement.SUCCESS_NO_INFO) {
-        successNoInfo = true;
-        continue;
-      }
-      totalUpdateCount += updateCount;
-    }
-    int totalDeleteCount = 0;
-    if (deletePreparedStatement != null) {
-      for (int updateCount : deletePreparedStatement.executeBatch()) {
-        if (updateCount != Statement.SUCCESS_NO_INFO) {
-          totalDeleteCount += updateCount;
-        }
-      }
-    }
-
-    checkAffectedRowCount(totalUpdateCount + totalDeleteCount, successNoInfo);
-
-    final List<SinkRecord> flushedRecords = records;
-    records = new ArrayList<>();
-    batchContainsDeletes = false;
-    return flushedRecords;
-  }
-
-  private void checkAffectedRowCount(int totalCount, boolean successNoInfo) {
-    if (totalCount != records.size() && !successNoInfo) {
-      switch (config.insertMode) {
-        case INSERT:
-          throw new ConnectException(String.format(
-              "Row count (%d) did not sum up to total number of records inserted/deleted (%d)",
-              totalCount,
-              records.size()
-          ));
-        case UPSERT:
-        case UPDATE:
-          log.debug(
-              "{}/deleted records:{} resulting in in totalUpdateCount:{}",
-              config.insertMode,
-              records.size(),
-              totalCount
-          );
-          break;
-        default:
-          throw new ConnectException("Unknown insert mode: " + config.insertMode);
-      }
-    }
-    if (successNoInfo) {
-      log.info(
-          "{} records:{} , but no count of the number of rows it affected is available",
-          config.insertMode,
-          records.size()
+    if (config.deleteEnabled && nonNull(deleteSql)) {
+      deletePreparedStatement = dbDialect.createPreparedStatement(connection, deleteSql);
+      deleteStatementBinder = dbDialect.statementBinder(
+          deletePreparedStatement,
+          config.pkMode,
+          schemaPair,
+          fieldsMetadata,
+          config.insertMode
       );
-    }
-  }
-
-  public void close() throws SQLException {
-    log.info("Closing BufferedRecords with preparedStatement: {} deletePreparedStatement: {}",
-        preparedStatement,
-        deletePreparedStatement);
-    if (preparedStatement != null) {
-      preparedStatement.close();
-      preparedStatement = null;
-    }
-    if (deletePreparedStatement != null) {
-      deletePreparedStatement.close();
-      deletePreparedStatement = null;
     }
   }
 
@@ -248,8 +264,8 @@ public class BufferedRecords {
       case UPSERT:
         if (fieldsMetadata.keyFieldNames.isEmpty()) {
           throw new ConnectException(String.format(
-              "Write to table '%s' in UPSERT mode requires key field names to be known, check the"
-              + " primary key configuration",
+              "Write to table '%s' in UPSERT mode requires key field names to be known"
+                  + ", check the primary key configuration",
               tableId
           ));
         }
@@ -282,21 +298,26 @@ public class BufferedRecords {
     String sql = null;
     if (config.deleteEnabled) {
       switch (config.pkMode) {
-        case NONE:
-        case KAFKA:
-        case RECORD_VALUE:
-          throw new ConnectException("Deletes are only supported for pk.mode record_key");
         case RECORD_KEY:
           if (fieldsMetadata.keyFieldNames.isEmpty()) {
             throw new ConnectException("Require primary keys to support delete");
           }
-          sql = dbDialect.buildDeleteStatement(
-              tableId,
-              asColumns(fieldsMetadata.keyFieldNames)
-          );
+          try {
+            sql = dbDialect.buildDeleteStatement(
+                tableId,
+                asColumns(fieldsMetadata.keyFieldNames)
+            );
+          } catch (UnsupportedOperationException e) {
+            throw new ConnectException(String.format(
+                "Deletes to table '%s' are not supported with the %s dialect.",
+                tableId,
+                dbDialect.name()
+            ));
+          }
           break;
+
         default:
-          break;
+          throw new ConnectException("Deletes are only supported for pk.mode record_key");
       }
     }
     return sql;
@@ -304,7 +325,7 @@ public class BufferedRecords {
 
   private Collection<ColumnId> asColumns(Collection<String> names) {
     return names.stream()
-                .map(name -> new ColumnId(tableId, name))
-                .collect(Collectors.toList());
+        .map(name -> new ColumnId(tableId, name))
+        .collect(Collectors.toList());
   }
 }

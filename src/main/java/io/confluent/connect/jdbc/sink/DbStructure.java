@@ -1,17 +1,16 @@
 /*
- * Copyright 2016 Confluent Inc.
+ * Copyright 2018 Confluent Inc.
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Licensed under the Confluent Community License (the "License"); you may not use
+ * this file except in compliance with the License.  You may obtain a copy of the
+ * License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.confluent.io/confluent-community-license
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OF ANY KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations under the License.
  */
 
 package io.confluent.connect.jdbc.sink;
@@ -90,6 +89,7 @@ public class DbStructure {
       );
     }
     String sql = dbDialect.buildCreateTableStatement(tableId, fieldsMetadata.allFields.values());
+    log.info("Creating table with sql: {}", sql);
     dbDialect.applyDdlStatements(connection, Collections.singletonList(sql));
   }
 
@@ -128,11 +128,13 @@ public class DbStructure {
       return false;
     }
 
-    for (SinkRecordField missingField: missingFields) {
+    for (SinkRecordField missingField : missingFields) {
       if (!missingField.isOptional() && missingField.defaultValue() == null) {
         throw new ConnectException(
-            "Cannot ALTER to add missing field " + missingField
-            + ", as it is not optional and does not have a default value"
+            String.format(
+                "Cannot ALTER %s to add missing field %s, as it is not optional and "
+                    + "does not have a default value",
+                tableId, missingField)
         );
       }
     }
@@ -188,6 +190,7 @@ public class DbStructure {
     final Set<SinkRecordField> missingFields = new HashSet<>();
     for (SinkRecordField field : fields) {
       if (!dbColumnNames.contains(field.name())) {
+        log.debug("Found missing field: {}", field);
         missingFields.add(field);
       }
     }
@@ -198,7 +201,7 @@ public class DbStructure {
 
     // check if the missing fields can be located by ignoring case
     Set<String> columnNamesLowerCase = new HashSet<>();
-    for (String columnName: dbColumnNames) {
+    for (String columnName : dbColumnNames) {
       columnNamesLowerCase.add(columnName.toLowerCase());
     }
 
@@ -210,7 +213,7 @@ public class DbStructure {
     }
 
     final Set<SinkRecordField> missingFieldsIgnoreCase = new HashSet<>();
-    for (SinkRecordField missing: missingFields) {
+    for (SinkRecordField missing : missingFields) {
       if (!columnNamesLowerCase.contains(missing.name().toLowerCase())) {
         missingFieldsIgnoreCase.add(missing);
       }

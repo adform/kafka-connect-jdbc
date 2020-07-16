@@ -62,6 +62,8 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
   private static final String JSONB_TYPE_NAME = "jsonb";
   private static final String POSTGRES_UUID_TYPE_NAME = "PostgresUUID";
   private static final String POSTGRES_OPTIONAL_UUID_TYPE_NAME = "PostgresOptionalUUID";
+  private static final String POSTGRES_JSONB_TYPE_NAME = "PostgresJsonb";
+  private static final String POSTGRES_OPTIONAL_JSONB_TYPE_NAME = "PostgresOptionalJsonb";
 
   /**
    * Create a new dialect instance with the given connector configuration.
@@ -221,6 +223,8 @@ public class PostgreSqlDatabaseDialect extends GenericDatabaseDialect {
       switch (schema.name()) {
         case POSTGRES_UUID_TYPE_NAME:
         case POSTGRES_OPTIONAL_UUID_TYPE_NAME:
+        case POSTGRES_JSONB_TYPE_NAME:
+        case POSTGRES_OPTIONAL_JSONB_TYPE_NAME:
           statement.setObject(index, value, Types.OTHER);
           return true;
         default:
